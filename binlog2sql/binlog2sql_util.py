@@ -6,6 +6,7 @@ import sys
 import argparse
 import datetime
 import getpass
+import json
 from contextlib import contextmanager
 from pymysqlreplication.event import QueryEvent
 from pymysqlreplication.row_event import (
@@ -134,12 +135,59 @@ def compare_items(items):
         return '`%s`=%%s' % k
 
 
+def fix_object_bytes(value: bytes):
+    try:
+        value = value.decode('utf-8')
+    except UnicodeDecodeError:
+        value = value.hex()
+    except Exception as e:
+        print("Failed to change bytes to string. error:", e)
+        print("error value is", value)
+        sys.exit(1)
+    return value
+
+
+def fix_object_list(value: list):
+    new_list = []
+    for v in value:
+        if isinstance(v, bytes):
+            v = fix_object_bytes(v)
+        elif isinstance(v, list):
+            v = fix_object_list(v)
+        elif isinstance(v, dict):
+            v = fix_object_dict(v)
+        
+        new_list.append(v)
+    return new_list
+
+
+def fix_object_dict(value: dict):
+    new_dict = {}
+    for k, v in value.items():
+        if isinstance(k, bytes):
+            k = fix_object_bytes(k)
+        
+        if isinstance(v, bytes):
+            v = fix_object_bytes(v)
+        elif isinstance(v, list):
+            v = fix_object_list(v)
+        elif isinstance(v, dict):
+            v = fix_object_dict(v)
+        
+        new_dict[k] = v
+    return new_dict
+
+
 def fix_object(value):
     """Fixes python objects so that they can be properly inserted into SQL queries"""
     if isinstance(value, set):
         value = ','.join(value)
     if PY3PLUS and isinstance(value, bytes):
-        return value.decode('utf-8')
+        return fix_object_bytes(value)
+    elif PY3PLUS and isinstance(value, dict):
+        return fix_object_dict(value)
+    elif PY3PLUS and isinstance(value, list):
+        return fix_object_list(value)
     elif not PY3PLUS and isinstance(value, unicode):
         return value.encode('utf-8')
     else:
@@ -164,6 +212,22 @@ def event_type(event):
     return t
 
 
+def handle_list(value: list):
+    new_list = []
+    for v in value:
+        if isinstance(v, dict):
+            try:
+                v = json.dumps(v)
+            except Exception as e:
+                print("Failed to change dict to string. Error is:", e)
+                print("Error value is:", v)
+                sys.exit(1)
+        elif isinstance(v, list):
+            v = handle_list(v)
+        new_list.append(v)
+    return new_list
+
+
 def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=None, flashback=False, no_pk=False):
     if flashback and no_pk:
         raise ValueError('only one of flashback or no_pk can be True')
@@ -175,7 +239,12 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
     if isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, UpdateRowsEvent) \
             or isinstance(binlog_event, DeleteRowsEvent):
         pattern = generate_sql_pattern(binlog_event, row=row, flashback=flashback, no_pk=no_pk)
-        sql = cursor.mogrify(pattern['template'], pattern['values'])
+        if isinstance(pattern['values'], list):
+            pattern_values = handle_list(pattern['values'])
+        else:
+            pattern_values = pattern['values']
+        #sql = cursor.mogrify(pattern['template'], pattern['values'])
+        sql = cursor.mogrify(pattern['template'], pattern_values)
         time = datetime.datetime.fromtimestamp(binlog_event.timestamp)
         sql += ' #start %s end %s time %s' % (e_start_pos, binlog_event.packet.log_pos, time)
     elif flashback is False and isinstance(binlog_event, QueryEvent) and binlog_event.query != 'BEGIN' \
