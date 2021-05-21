@@ -1,3 +1,4 @@
 PyMySQL==0.7.11
 wheel==0.29.0
 mysql-replication==0.23
+colorlog==5.0.1

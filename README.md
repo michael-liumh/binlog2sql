@@ -18,13 +18,16 @@ binlog2sql
 * 已测试环境
     * Python 2.7, 3.4+
     * MySQL 5.6, 5.7
+* 修改
+    * 运行过程中不会被blob类型的表阻断，但字段数据类型是blob的表依然不适合回滚
+    * 更新requirements.txt中mysql-replication的版本
 
 
 安装
 ==============
 
 ```
-shell> git clone https://github.com/danfengcao/binlog2sql.git && cd binlog2sql
+shell> git clone https://github.com/Michaelsky0913/binlog2sql.git && cd binlog2sql
 shell> pip install -r requirements.txt
 ```
 git与pip的安装问题请自行搜索解决。

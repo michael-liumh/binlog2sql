@@ -7,6 +7,8 @@ import argparse
 import datetime
 import getpass
 import json
+import logging
+import colorlog
 from contextlib import contextmanager
 from pymysqlreplication.event import QueryEvent
 from pymysqlreplication.row_event import (
@@ -15,6 +17,33 @@ from pymysqlreplication.row_event import (
     DeleteRowsEvent,
 )
 
+# create a logger
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+# set log format
+log_colors_config = {
+    'DEBUG': 'bold_puple',
+    'INFO': 'bold_green',
+    'WARNING': 'bold_yellow',
+    'ERROR': 'bold_red',
+    'CRITICAL': 'bold_red',
+}
+log_format = colorlog.ColoredFormatter(
+    "%(log_color)s[%(asctime)s] [%(module)s:%(funcName)s] [%(lineno)d] [%(levelname)s] %(message)s", 
+    log_colors=log_colors_config
+)
+# add a file handler
+#logfile = sys.path[0] + os.sep + sys.argv[0].split(os.sep)[-1].split(".")[0] + '.log'
+logfile = "".join(sys.argv[0].split(".")[:-1]) + '.log'
+file_handler = logging.FileHandler(logfile, mode='a')
+file_handler.setFormatter(log_format)
+logger.addHandler(file_handler)
+# add a console handler
+# console_handler = logging.StreamHandler()
+# console_handler.setFormatter(log_format)
+# logger.addHandler(console_handler)
+
+table = ''
 
 if sys.version > '3':
     PY3PLUS = True
@@ -139,10 +168,13 @@ def fix_object_bytes(value: bytes):
     try:
         value = value.decode('utf-8')
     except UnicodeDecodeError:
+        logger.info(table)
+        logger.error("Could not decode value [" + str(value) + "] with utf8 encoding. use value.hex() instead")
         value = value.hex()
+        logger.warning("value after use hex() function is: " + str(value))
     except Exception as e:
-        print("Failed to change bytes to string. error:", e)
-        print("error value is", value)
+        logger.error("Failed to change bytes to string. error:" + str(e))
+        logger.error("error value is" + str(value))
         sys.exit(1)
     return value
 
@@ -219,8 +251,8 @@ def handle_list(value: list):
             try:
                 v = json.dumps(v)
             except Exception as e:
-                print("Failed to change dict to string. Error is:", e)
-                print("Error value is:", v)
+                logger.error("Failed to dump dict value to string. Error is:" + str(e))
+                logger.error("Error value is:" + str(v))
                 sys.exit(1)
         elif isinstance(v, list):
             v = handle_list(v)
@@ -259,6 +291,8 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
 def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False):
     template = ''
     values = []
+    global table
+    table = binlog_event.schema+'.'+binlog_event.table
     if flashback is True:
         if isinstance(binlog_event, WriteRowsEvent):
             template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
@@ -315,7 +349,15 @@ def reversed_lines(fin):
     part = ''
     for block in reversed_blocks(fin):
         if PY3PLUS:
-            block = block.decode("utf-8")
+            try:
+                block = block.decode("utf-8")
+            except UnicodeDecodeError:
+                logger.error("Could not decode value [" + str(block) + "] with utf8 encoding. use value.hex() instead")
+                block = block.hex()
+            except Exception as e:
+                logger.error("Failed to change bytes to string. error:" + str(e))
+                logger.error("error value is" + str(block))
+                sys.exit(1)
         for c in reversed(block):
             if c == '\n' and part:
                 yield part[::-1]
