@@ -167,9 +167,13 @@ def compare_items(items):
 def fix_object_bytes(value: bytes):
     try:
         value = value.decode('utf-8')
+    # blob数据类型里存的是二进制，因无法辨析数据被编码成二进制前是什么？文本文件？图片？影音？其它等
+    # 当二进制无法被 utf8 解码时，改为解码为十六进制，并记录对应的表名，防止进程被异常终止
+    # 如果数据被解码为十六进制，与源数据就对不上了，所以不能用来进行回滚
     except UnicodeDecodeError:
         logger.info(table)
         logger.error("Could not decode value [" + str(value) + "] with utf8 encoding. use value.hex() instead")
+        
         value = value.hex()
         logger.warning("value after use hex() function is: " + str(value))
     except Exception as e:
@@ -182,6 +186,7 @@ def fix_object_bytes(value: bytes):
 def fix_object_list(value: list):
     new_list = []
     for v in value:
+        # list里可能同时存在string、bytes、list、dict
         if isinstance(v, bytes):
             v = fix_object_bytes(v)
         elif isinstance(v, list):
@@ -189,6 +194,7 @@ def fix_object_list(value: list):
         elif isinstance(v, dict):
             v = fix_object_dict(v)
         
+        # string直接原封不动拿过来
         new_list.append(v)
     return new_list
 
@@ -196,9 +202,11 @@ def fix_object_list(value: list):
 def fix_object_dict(value: dict):
     new_dict = {}
     for k, v in value.items():
+        # json内部key都是字符串或bytes，如果是bytes，则跳转到bytes解析
         if isinstance(k, bytes):
             k = fix_object_bytes(k)
         
+        # json内部的value则多种多样，可能为字符串、bytes、list、dict
         if isinstance(v, bytes):
             v = fix_object_bytes(v)
         elif isinstance(v, list):
@@ -206,6 +214,7 @@ def fix_object_dict(value: dict):
         elif isinstance(v, dict):
             v = fix_object_dict(v)
         
+        # 字符串的直接赋值即可
         new_dict[k] = v
     return new_dict
 
@@ -216,8 +225,10 @@ def fix_object(value):
         value = ','.join(value)
     if PY3PLUS and isinstance(value, bytes):
         return fix_object_bytes(value)
+    # 添加json数据解析（目前仅测试varchar里存储的json）
     elif PY3PLUS and isinstance(value, dict):
         return fix_object_dict(value)
+    # varchar里存储的list解析
     elif PY3PLUS and isinstance(value, list):
         return fix_object_list(value)
     elif not PY3PLUS and isinstance(value, unicode):
@@ -349,15 +360,9 @@ def reversed_lines(fin):
     part = ''
     for block in reversed_blocks(fin):
         if PY3PLUS:
-            try:
-                block = block.decode("utf-8")
-            except UnicodeDecodeError:
-                logger.error("Could not decode value [" + str(block) + "] with utf8 encoding. use value.hex() instead")
-                block = block.hex()
-            except Exception as e:
-                logger.error("Failed to change bytes to string. error:" + str(e))
-                logger.error("error value is" + str(block))
-                sys.exit(1)
+            # 解析回滚sql时，请确认对应的表没有blob数据类型，否则将会异常终止
+            # 这里就不做异常捕获处理了，防止回滚到脏数据
+            block = block.decode("utf-8")
         for c in reversed(block):
             if c == '\n' and part:
                 yield part[::-1]
