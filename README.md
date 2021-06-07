@@ -6,7 +6,7 @@
 ==============
 ```
 git clone https://github.com/Michaelsky0913/binlog2sql.git && cd binlog2sql && \
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 ```
 git与pip的安装问题请自行搜索解决。
 
