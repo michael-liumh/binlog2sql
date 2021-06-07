@@ -38,7 +38,7 @@ for t in ${all_type_new[*]}
 do
     echo
     msg info "$t SORT"
-    grep $t $sql_file | awk -r -F '[( ]+' \
+    awk '$1~/'$t'/{print $0}' $sql_file | awk -r -F '[( ]+' \
            '{if($1~/INSERT/){print $1,$3} 
         else if($1~/UPDATE/){print $1,$2} 
         else if($1~/DELETE/){print $1,$3}

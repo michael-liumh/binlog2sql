@@ -170,7 +170,8 @@ def fix_object_bytes(value: bytes):
     try:
         value = value.decode('utf-8')
     except Exception as e:
-        logger.info("Failed to bytes object, it probably comes from the blob filed. We will skip it. This value comes from table: " + str(table))
+        # blob类型的数据解码不了
+        logger.info("Failed to decode bytes object. We will skip it. This value comes from table: " + str(table))
         # 如果解码异常，则将异常标志置为1，后续不输出这个sql 
         global err_flag
         err_flag = 1
