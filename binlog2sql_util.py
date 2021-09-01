@@ -17,32 +17,6 @@ from pymysqlreplication.row_event import (
     DeleteRowsEvent,
 )
 
-# create a logger
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-# set log format
-log_colors_config = {
-    'DEBUG': 'bold_puple',
-    'INFO': 'bold_green',
-    'WARNING': 'bold_yellow',
-    'ERROR': 'bold_red',
-    'CRITICAL': 'bold_red',
-}
-log_format = colorlog.ColoredFormatter(
-    "%(log_color)s[%(asctime)s] [%(module)s:%(funcName)s] [%(lineno)d] [%(levelname)s] %(message)s", 
-    log_colors=log_colors_config
-)
-# add a file handler
-logfile = sys.path[0] + os.sep + sys.argv[0].split(os.sep)[-1].split(".")[0] + '.log'
-logfile = "".join(sys.argv[0].split(".")[:-1]) + '.log'
-file_handler = logging.FileHandler(logfile, mode='a')
-file_handler.setFormatter(log_format)
-logger.addHandler(file_handler)
-# add a console handler
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(log_format)
-logger.addHandler(console_handler)
-
 table = ''
 err_flag = 0
 
@@ -50,6 +24,51 @@ if sys.version > '3':
     PY3PLUS = True
 else:
     PY3PLUS = False
+
+# create a logger
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+
+def set_log_format():
+    import logging.handlers
+    import colorlog
+
+    global logger
+
+    # set logger color
+    log_colors_config = {
+        'DEBUG': 'bold_purple',
+        'INFO': 'bold_green',
+        'WARNING': 'bold_yellow',
+        'ERROR': 'bold_red',
+        'CRITICAL': 'bold_red',
+    }
+
+    # set logger format
+    log_format = colorlog.ColoredFormatter(
+        "%(log_color)s[%(asctime)s] [%(module)s:%(funcName)s] [%(lineno)d] [%(levelname)s] %(message)s",
+        log_colors=log_colors_config
+    )
+
+    # add console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(log_format)
+    logger.addHandler(console_handler)
+
+    # add rotate file handler
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    logs_dir = os.path.join(base_dir, 'logs')
+    if not os.path.isdir(logs_dir):
+        os.makedirs(logs_dir, exist_ok=True)
+
+    logfile = logs_dir + os.sep + sys.argv[0].split(os.sep)[-1].split('.')[0] + '.log'
+    file_maxsize = 1024 * 1024 * 100  # 100m
+    # logfile_size = os.path.getsize(logfile) if os.path.exists(logfile) else 0
+
+    file_handler = logging.handlers.RotatingFileHandler(logfile, maxBytes=file_maxsize, backupCount=10)
+    file_handler.setFormatter(log_format)
+    logger.addHandler(file_handler)
 
 
 def is_valid_datetime(string):
@@ -166,22 +185,18 @@ def compare_items(items):
 
 
 def fix_object_bytes(value: bytes):
-    # logger.warning("fix_object_bytes 被调用")
     try:
         value = value.decode('utf-8')
-    except Exception as e:
+    except Exception:
         # blob类型的数据解码不了
         logger.info("Failed to decode bytes object. We will skip it. This value comes from table: " + str(table))
         # 如果解码异常，则将异常标志置为1，后续不输出这个sql 
         global err_flag
         err_flag = 1
-    # logger.info("所在表：" + table)
-    # logger.info("bytes返回值：" + str(value))
     return value
 
 
 def fix_object_array(value: list):
-    # logger.warning("fix_object_array 被调用")
     new_list = []
     for v in value:
         # list里可能同时存在string、bytes(划重点)、array、json
@@ -194,13 +209,10 @@ def fix_object_array(value: list):
         
         # string直接原封不动存储
         new_list.append(v)
-    # logger.info("所在表：" + table)
-    # logger.info("array返回值：" + str(new_list))
     return new_list
 
 
 def fix_object_json(value: dict):
-    # logger.warning("fix_object_json 被调用")
     new_dict = {}
     for k, v in value.items():
         # json内部 key 可能是字符串或bytes，如果是bytes，则跳转到bytes解析
@@ -217,8 +229,6 @@ def fix_object_json(value: dict):
         
         # 字符串直接赋值即可
         new_dict[k] = v
-    # logger.info("所在表：" + table)
-    # logger.info("json返回值：" + str(new_dict))
     return new_dict
 
 
@@ -260,7 +270,6 @@ def event_type(event):
 
 
 def handle_list(value: list):
-    # logger.info("handle_list 被调用")
     new_list = []
     for v in value:
         if isinstance(v, dict):
@@ -375,15 +384,13 @@ def reversed_lines(fin):
     part = ''
     for block in reversed_blocks(fin):
         if PY3PLUS:
-            # 解析回滚sql时，请确认对应的表没有blob数据类型，否则将会异常终止
+            # block = block.decode("utf-8")
             try:
-                # block = block.decode("utf-8")
                 block = fix_object(block)
             except Exception as e:
                 logger.error("Error: " + str(e))
-                logger.error("Could not decode block with utf8. skip the block " + str(block))
-                logger.warning("Error block belongs to table: " + str(table))
-                sys.exit(1)
+                logger.error("Could not decode block with utf8. "
+                             "Error block belongs to table: %s, skip it." % str(table))
                 continue
         for c in reversed(block):
             if c == '\n' and part:
@@ -406,7 +413,4 @@ def reversed_blocks(fin, block_size=4096):
         delta = min(block_size, here)
         here -= delta
         fin.seek(here, os.SEEK_SET)
-        info = fin.read(delta)
-        # print(info)
-        yield info
-        # yield fin.read(delta)
+        yield fin.read(delta)
