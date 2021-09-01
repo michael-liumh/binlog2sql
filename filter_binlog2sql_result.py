@@ -111,7 +111,7 @@ def filter_update_sql(sql, keep_col_list=None):
         table = sql_part[1]
         start_idx = 3
     else:
-        logger.warning('This function only support update')
+        logger.warning('This function only filter update')
         return sql
 
     condition_idx = sql_part.index('WHERE')
