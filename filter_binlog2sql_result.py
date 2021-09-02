@@ -57,16 +57,18 @@ def set_log_format():
 def parse_args():
     """parse args to connect MySQL"""
 
-    parser = argparse.ArgumentParser(description='Parse MySQL Connect Settings', add_help=False)
+    parser = argparse.ArgumentParser(description='Parse MySQL Connect Settings', add_help=False,
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--help', dest='help', action='store_true', help='help information', default=False)
 
-    #sql_file = parser.add_argument_group('sql file')
-    #sql_file.add_argument('-f', '--file', dest='sql_file', type=str,
-    #                      help='sql file you want to execute', default='')
-    sql_file = parser.add_argument_group('sql file')
-    sql_file.add_argument('-f', '--file', dest='sql_file', type=str,
-                          help='sql file you want to execute', default='')
-    
+    parser.add_argument('-s', '--source-file', dest='sql_file', type=str,
+                        help='sql file you want to filter', default='')
+    parser.add_argument('-p', '--pk', dest='primary_key', type=str,
+                        help='choose a column to be primary key', default='`id`')
+    parser.add_argument('-k', '--kcl', dest='keep_col_list', type=str, nargs='*',
+                        help='choose multi column that you want to keep, these column will not be filter', default=[])
+    parser.add_argument('-t', '--out-file', dest='out_file', type=str,
+                        help='file that save the result', default='')
     return parser
 
 
@@ -103,63 +105,116 @@ def read_file(filename, is_yield=False):
         return info
 
 
-def filter_update_sql(sql, keep_col_list=None):
-    sql_tmp = re.subn(',|AND|LIMIT 1', '', sql)[0]
-    sql_part = sql_tmp.split()
-    sql_type = sql_part[0]
-    if sql_type.upper() == 'UPDATE':
-        table = sql_part[1]
-        start_idx = 3
-    else:
-        logger.warning('This function only filter update')
+def fix_json_col(col_list):
+    # 左括号数量 与 右括号数量
+    json_mark_left_cnt = 0
+    json_mark_right_cnt = 0
+    json_col = ''
+    col_list_new = []
+    for i, col in enumerate(col_list):
+        if re.search('{', col) is not None:
+            json_mark_left_cnt += 1
+            json_col += col
+            continue
+        elif json_mark_left_cnt != json_mark_right_cnt:
+            if re.search('}', col) is not None:
+                json_mark_right_cnt += 1
+            json_col += col
+            if json_mark_left_cnt == json_mark_right_cnt:
+                col_list_new.append(json_col[:-1])
+                # json_col = ''
+            continue
+        else:
+            col_list_new.append(col.replace(',', ''))
+    return col_list_new
+
+
+def filter_update(sql: str, primary_key: str = None, keep_col_list: list = None) -> str:
+    if not sql.startswith('UPDATE'):
         return sql
 
-    condition_idx = sql_part.index('WHERE')
-    comment_idx = sql_part.index('#start')
-    new_col_value = sql_part[start_idx:condition_idx]
-    old_col_value = sql_part[condition_idx+1:comment_idx]
-    comment_value = " ".join(sql_part[comment_idx:])
+    if primary_key is None:
+        primary_key = '`id`'
+    if keep_col_list is None:
+        keep_col_list = []
+    if primary_key not in keep_col_list:
+        keep_col_list.append(primary_key)
 
-    new_sql = sql_type.upper() + ' ' + table + ' SET'
-    condition = 'WHERE ' + old_col_value[0]
+    # update_col_list = list(map(lambda s: s.replace(',', ''), sql.split('WHERE')[0].split()))
+    sql_split = sql.split('WHERE')
+    update_col_list = sql_split[0].split()
+    if "{" in str(update_col_list):
+        update_col_list = fix_json_col(update_col_list)
+    else:
+        update_col_list = list(map(lambda s: s.replace(',', ''), update_col_list))
 
-    for i, (new_value, old_value) in enumerate(zip(new_col_value, old_col_value)):
+    where_col_list = list(map(lambda s: s.strip().replace(', ', ',').replace(': ', ':'), sql_split[1].split('AND')))
+    limit_idx = where_col_list[-1].find('LIMIT 1')
+    comment_idx = where_col_list[-1].find('#')
+    comment = where_col_list[-1][comment_idx:].strip()
+    where_col_list[-1] = where_col_list[-1][:limit_idx].strip()
+
+    update_col_list_new, where_col_list_new = [], []
+    for new_value, old_value in zip(update_col_list[3:], where_col_list):
+        if 'NULL' in new_value:
+            if old_value.split('=')[0] in keep_col_list or old_value.split(' ')[0] in keep_col_list:
+                where_col_list_new.append(old_value)
+            continue
+        elif 'NULL' not in new_value and 'NULL' in old_value:
+            update_col_list_new.append(new_value)
+
         if new_value != old_value:
-            if i == 0 or new_sql.endswith('SET'):
-                new_sql += ' ' + new_value
-            else:
-                new_sql += ', ' + new_value
-            condition += ' AND ' + old_value
-        elif keep_col_list:
-            for col in keep_col_list:
-                if re.search(col, old_value):
-                    condition += ' AND ' + old_value
+            if new_value not in update_col_list_new:
+                update_col_list_new.append(new_value)
+            if old_value not in where_col_list_new:
+                where_col_list_new.append(old_value)
+        else:
+            if old_value.split('=')[0] in keep_col_list and old_value not in where_col_list_new:
+                where_col_list_new.append(old_value)
 
-    new_sql += ' ' + condition + '; ' + comment_value
+    new_sql = " ".join(update_col_list[:3]) + ' ' + ','.join(update_col_list_new) + \
+              ' WHERE ' + ' AND '.join(where_col_list_new) + '; ' + comment
     return new_sql
+
+
+def get_file_lines(filename):
+    logger.info('getting file %s lines' % filename)
+    cnt = 0
+    with open(filename) as f:
+        while True:
+            buffer = f.read(4096)
+            if not buffer:
+                break
+            cnt += buffer.count('\n')
+    return cnt
 
 
 def main(args):
     sql_file = args.sql_file
+    keep_col_list = args.keep_col_list
+    primary_key = args.primary_key
+    out_file = args.out_file if args.out_file else 'new_' + sql_file
+    logger.warning('This function only filter update statement')
+
+    sql_file_len = get_file_lines(sql_file)
     cnt = 0
     info_format = '[{file}] '.format(
         file=sql_file
     )
     finished_info = info_format + 'finished'
-    info_format += '[Filtered line count: {cnt}]'
+    info_format += '[Filtered line count: {cnt} / {sql_file_len}]'
 
-    keep_col_list = [
-        '`corp_id`',
-    ]
     try:
-        for line in read_file(sql_file, is_yield=True):
-            new_sql = filter_update_sql(line, keep_col_list=keep_col_list)
-            print(new_sql)
-            cnt += 1
-            if (cnt % 2000) == 0:
-                logger.info(info_format.format(cnt=cnt))
-        logger.info(info_format.format(cnt=cnt))
-        logger.info(finished_info)
+        with open(out_file, 'w', encoding='utf8') as f:
+            for line in read_file(sql_file, is_yield=True):
+                new_sql = filter_update(line, primary_key=primary_key, keep_col_list=keep_col_list)
+                f.write(new_sql + '\n')
+                cnt += 1
+                if (cnt % 10000) == 0:
+                    logger.info(info_format.format(cnt=cnt, sql_file_len=sql_file_len))
+            logger.info(info_format.format(cnt=cnt, sql_file_len=sql_file_len))
+            logger.info(finished_info)
+            logger.warning("The result saved in %s" % out_file)
     except Exception as e:
         logger.error('Detect error in line: [' + str(line) + '], err_msg is: ' + str(e))
 
