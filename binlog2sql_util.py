@@ -17,9 +17,6 @@ from pymysqlreplication.row_event import (
     DeleteRowsEvent,
 )
 
-table = ''
-err_flag = 0
-
 if sys.version > '3':
     PY3PLUS = True
 else:
@@ -185,14 +182,7 @@ def compare_items(items):
 
 
 def fix_object_bytes(value: bytes):
-    try:
-        value = value.decode('utf-8')
-    except Exception:
-        # blob类型的数据解码不了
-        logger.info("Failed to decode bytes object. We will skip it. This value comes from table: " + str(table))
-        # 如果解码异常，则将异常标志置为1，后续不输出这个sql 
-        global err_flag
-        err_flag = 1
+    value = '0x' + value.hex().upper()
     return value
 
 
@@ -285,6 +275,23 @@ def handle_list(value: list):
     return new_list
 
 
+def fix_hex_values(sql: str):
+    begin = 0
+    new_sql = ''
+    while sql.find("'0x", begin) > 0:
+        # 拿第1个引号的下标
+        idx1 = sql.find("'0x", begin)
+        # 拿第2个引号的下标
+        idx2 = sql.find("'", idx1 + 1)
+        new_sql += sql[begin:idx1] + sql[idx1 + 1:idx2]
+        begin = idx2 + 1
+
+    if new_sql:
+        new_sql += sql[idx2 + 1:]
+
+    return new_sql
+
+
 def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=None, flashback=False, no_pk=False):
     if flashback and no_pk:
         raise ValueError('only one of flashback or no_pk can be True')
@@ -298,26 +305,23 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
         # 会调用 fix_object 函数生成sql
         pattern = generate_sql_pattern(binlog_event, row=row, flashback=flashback, no_pk=no_pk)
         
-        # 过滤有异常标志的 sql，并将异常标志还原
-        global err_flag
-        if err_flag == 1:
-            err_flag = 0
-            return sql
-        
         # cursor.mogrify 处理 value 时，会返回一个字符串，如果 value 里包含 dict，则会报错
         if isinstance(pattern['values'], list):
             pattern_values = handle_list(pattern['values'])
         else:
             pattern_values = pattern['values']
         sql = cursor.mogrify(pattern['template'], pattern_values)
-        # 原始代码
-        # sql = cursor.mogrify(pattern['template'], pattern['values'])
+        if "'0x" in str(sql):
+            sql = fix_hex_values(sql)
         time = datetime.datetime.fromtimestamp(binlog_event.timestamp)
         sql += ' #start %s end %s time %s' % (e_start_pos, binlog_event.packet.log_pos, time)
     elif flashback is False and isinstance(binlog_event, QueryEvent) and binlog_event.query != 'BEGIN' \
             and binlog_event.query != 'COMMIT':
         if binlog_event.schema:
-            sql = 'USE {0};\n'.format(binlog_event.schema)
+            if isinstance(binlog_event.schema, bytes):
+                sql = 'USE {0};\n'.format(binlog_event.schema.decode('utf8'))
+            else:
+                sql = 'USE {0};\n'.format(binlog_event.schema)
         sql += '{0};'.format(fix_object(binlog_event.query))
 
     return sql
@@ -326,8 +330,6 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
 def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False):
     template = ''
     values = []
-    global table
-    table = binlog_event.schema+'.'+binlog_event.table
     if flashback is True:
         if isinstance(binlog_event, WriteRowsEvent):
             template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
@@ -385,13 +387,7 @@ def reversed_lines(fin):
     for block in reversed_blocks(fin):
         if PY3PLUS:
             # block = block.decode("utf-8")
-            try:
-                block = fix_object(block)
-            except Exception as e:
-                logger.error("Error: " + str(e))
-                logger.error("Could not decode block with utf8. "
-                             "Error block belongs to table: %s, skip it." % str(table))
-                continue
+            block = fix_object(block)
         for c in reversed(block):
             if c == '\n' and part:
                 yield part[::-1]

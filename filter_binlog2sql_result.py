@@ -151,7 +151,7 @@ def filter_update(sql: str, primary_key: str = None, keep_col_list: list = None)
     where_col_list = list(map(lambda s: s.strip().replace(', ', ',').replace(': ', ':'), sql_split[1].split('AND')))
     limit_idx = where_col_list[-1].find('LIMIT 1')
     comment_idx = where_col_list[-1].find('#')
-    comment = where_col_list[-1][comment_idx:].strip()
+    comment = '; ' + where_col_list[-1][comment_idx:].strip() if comment_idx > 0 else ''
     where_col_list[-1] = where_col_list[-1][:limit_idx].strip()
 
     update_col_list_new, where_col_list_new = [], []
@@ -173,7 +173,7 @@ def filter_update(sql: str, primary_key: str = None, keep_col_list: list = None)
                 where_col_list_new.append(old_value)
 
     new_sql = " ".join(update_col_list[:3]) + ' ' + ','.join(update_col_list_new) + \
-              ' WHERE ' + ' AND '.join(where_col_list_new) + '; ' + comment
+              ' WHERE ' + ' AND '.join(where_col_list_new) + comment
     return new_sql
 
 

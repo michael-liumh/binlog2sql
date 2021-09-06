@@ -7,7 +7,7 @@ import pymysql
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent
 from binlog2sql_util import command_line_args, concat_sql_from_binlog_event, create_unique_file, temp_open, \
-    reversed_lines, is_dml_event, event_type, logger
+    reversed_lines, is_dml_event, event_type, logger, set_log_format
 
 
 class Binlog2sql(object):
@@ -69,8 +69,9 @@ class Binlog2sql(object):
         flag_last_event = False
         e_start_pos, last_pos = stream.log_pos, stream.log_pos
         # to simplify code, we do not use flock for tmp_file.
-        tmp_file = create_unique_file('%s.%s' % (self.conn_setting['host'], self.conn_setting['port']))
-        with temp_open(tmp_file, "w") as f_tmp, self.connection as cursor:
+        # tmp_file = create_unique_file('%s.%s' % (self.conn_setting['host'], self.conn_setting['port']))
+        # with temp_open(tmp_file, "w") as f_tmp, self.connection as cursor:
+        with self.connection as cursor:
             for binlog_event in stream:
                 if not self.stop_never:
                     try:
@@ -127,7 +128,7 @@ class Binlog2sql(object):
                     break
 
             stream.close()
-            f_tmp.close()
+            # f_tmp.close()
             # if self.flashback:
             #     self.print_rollback_sql(filename=tmp_file)
         return True
@@ -153,6 +154,7 @@ class Binlog2sql(object):
 if __name__ == '__main__':
     args = command_line_args(sys.argv[1:])
     conn_setting = {'host': args.host, 'port': args.port, 'user': args.user, 'passwd': args.password, 'charset': 'utf8mb4'}
+    set_log_format()
     binlog2sql = Binlog2sql(connection_settings=conn_setting, start_file=args.start_file, start_pos=args.start_pos,
                             end_file=args.end_file, end_pos=args.end_pos, start_time=args.start_time,
                             stop_time=args.stop_time, only_schemas=args.databases, only_tables=args.tables,
