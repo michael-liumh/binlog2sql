@@ -331,7 +331,7 @@ def parse_args():
                                  help='Host the MySQL database server located', default='127.0.0.1')
     connect_setting.add_argument('-u', '--user', dest='user', type=str,
                                  help='MySQL Username to log in as', default='root')
-    connect_setting.add_argument('-p', '--password', dest='password', type=str,
+    connect_setting.add_argument('-p', '--password', dest='password', type=str, nargs='*',
                                  help='MySQL Password to use', default='')
     connect_setting.add_argument('-P', '--port', dest='port', type=int,
                                  help='MySQL port to use', default=3306)

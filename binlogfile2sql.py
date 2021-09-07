@@ -117,8 +117,8 @@ class BinlogFile2sql(object):
 if __name__ == '__main__':
     args = command_line_args(sys.argv[1:])
     set_log_format()
-    connectionSettings = {'host': args.host, 'port': args.port, 'user': args.user, 'passwd': args.password}
-    bin2sql = BinlogFile2sql(file_path=args.file_path[0], connection_settings=connectionSettings,
+    connection_settings = {'host': args.host, 'port': args.port, 'user': args.user, 'passwd': args.password}
+    bin2sql = BinlogFile2sql(file_path=args.file_path[0], connection_settings=connection_settings,
                              start_pos=args.startPos, end_pos=args.endPos,
                              start_time=args.startTime, stop_time=args.stopTime, only_schemas=args.databases,
                              only_tables=args.tables, no_pk=args.nopk, flashback=args.flashback,

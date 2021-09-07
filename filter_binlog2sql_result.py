@@ -156,12 +156,16 @@ def filter_update(sql: str, primary_key: str = None, keep_col_list: list = None)
 
     update_col_list_new, where_col_list_new = [], []
     for new_value, old_value in zip(update_col_list[3:], where_col_list):
-        if 'NULL' in new_value:
-            if old_value.split('=')[0] in keep_col_list or old_value.split(' ')[0] in keep_col_list:
-                where_col_list_new.append(old_value)
+        if 'NULL' in new_value and 'NULL' in old_value:
             continue
         elif 'NULL' not in new_value and 'NULL' in old_value:
             update_col_list_new.append(new_value)
+            continue
+        elif 'NULL' in new_value and 'NULL' not in old_value:
+            where_col_list_new.append(old_value)
+            if new_value.split('=')[0] != primary_key and new_value not in update_col_list_new:
+                update_col_list_new.append(new_value)
+            continue
 
         if new_value != old_value:
             if new_value not in update_col_list_new:
@@ -169,7 +173,8 @@ def filter_update(sql: str, primary_key: str = None, keep_col_list: list = None)
             if old_value not in where_col_list_new:
                 where_col_list_new.append(old_value)
         else:
-            if old_value.split('=')[0] in keep_col_list and old_value not in where_col_list_new:
+            if (old_value.split('=')[0] in keep_col_list or old_value.split(' ')[0] in keep_col_list) \
+                    and old_value not in where_col_list_new:
                 where_col_list_new.append(old_value)
 
     new_sql = " ".join(update_col_list[:3]) + ' ' + ','.join(update_col_list_new) + \
