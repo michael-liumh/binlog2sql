@@ -5,6 +5,7 @@ import datetime
 import os
 import sys
 import pymysql
+import re
 from binlogfile2sql_util import command_line_args, BinLogFileReader
 from binlog2sql_util import concat_sql_from_binlog_event, create_unique_file, reversed_lines, logger, set_log_format
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent
@@ -37,7 +38,7 @@ class BinlogFile2sql(object):
         self.only_tables = only_tables if only_tables else None
         self.no_pk, self.flashback, self.stop_never = (no_pk, flashback, stop_never)
 
-        self.binlog_list = []
+        self.binlog_file_list = []
         self.connection = pymysql.connect(**self.connection_settings)
 
     def process_binlog(self):
@@ -114,13 +115,44 @@ class BinlogFile2sql(object):
         pass
 
 
+def main(args):
+    connection_settings = {'host': args.host, 'port': args.port, 'user': args.user, 'passwd': args.password}
+    binlog_file_list = []
+    if args.file_dir and not args.file_path:
+        for f in os.listdir(args.file_dir):
+            if args.start_file and f < args.start_file:
+                continue
+            if args.stop_file and f > args.stop_file:
+                break
+            if re.search(args.file_regex, f) is not None:
+                binlog_file = os.path.join(args.file_dir, f)
+                binlog_file_list.append(binlog_file)
+    else:
+        for f in args.file_path:
+            if re.search(args.file_regex, f) is not None:
+                if not f.startswith('/') and args.file_dir:
+                    binlog_file = os.path.join(args.file_dir, f)
+                else:
+                    binlog_file = f
+                binlog_file_list.append(binlog_file)
+
+    if args.check:
+        from pprint import pprint
+        pprint(binlog_file_list)
+        sys.exit(1)
+
+    for binlog_file in binlog_file_list:
+        logger.info('parsing binlog file: %s' % binlog_file)
+        bin2sql = BinlogFile2sql(file_path=binlog_file, connection_settings=connection_settings,
+                                 start_pos=args.start_pos, end_pos=args.end_pos,
+                                 start_time=args.start_time, stop_time=args.stop_time,
+                                 only_schemas=args.databases,
+                                 only_tables=args.tables, no_pk=args.no_pk, flashback=args.flashback,
+                                 stop_never=args.stop_never)
+        bin2sql.process_binlog()
+
+
 if __name__ == '__main__':
     args = command_line_args(sys.argv[1:])
     set_log_format()
-    connection_settings = {'host': args.host, 'port': args.port, 'user': args.user, 'passwd': args.password}
-    bin2sql = BinlogFile2sql(file_path=args.file_path[0], connection_settings=connection_settings,
-                             start_pos=args.startPos, end_pos=args.endPos,
-                             start_time=args.startTime, stop_time=args.stopTime, only_schemas=args.databases,
-                             only_tables=args.tables, no_pk=args.nopk, flashback=args.flashback,
-                             stop_never=args.stopnever)
-    bin2sql.process_binlog()
+    main(args)

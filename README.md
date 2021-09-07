@@ -32,6 +32,8 @@ git与pip的安装问题请自行搜索解决。
   * 用法：
     * python3 filter_binlog2sql_result.py -s 1.sql -o 2.sql
 * 添加对 blob 数据类型的支持（包括 binary、varbinary 等二进制类型）
+* 添加 binlog file 的解析支持
+* 添加 binlog file dir，可指定解析某个目录下特定的几个 binlog file，用 --check 检查选择的文件是否正确，--file-dir 选择目录，--file-regex 正则匹配 binlog file
 
 测试
 ==============
@@ -41,4 +43,4 @@ TODO
 ==============
 - [x] 添加对 json 数据类型的支持
 - [x] 添加对 blob 数据类型的支持（包括 binary、varbinary 等二进制类型）
-- [ ] 直接解析指定目录下binlog文件（可指定binlog目录前缀，排除非binlog文件）
+- [x] 直接解析指定目录下binlog文件（可指定binlog目录前缀，排除非binlog文件）

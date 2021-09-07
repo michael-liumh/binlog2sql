@@ -335,44 +335,59 @@ def parse_args():
                                  help='MySQL Password to use', default='')
     connect_setting.add_argument('-P', '--port', dest='port', type=int,
                                  help='MySQL port to use', default=3306)
-    range = parser.add_argument_group('range filter')
-    range.add_argument('--start-position', '--start-pos', dest='startPos', type=int,
-                       help='Start position of the --start-file', default=4)
-    range.add_argument('--stop-position', '--end-pos', dest='endPos', type=int,
-                       help="Stop position of --stop-file. default: latest position of '--stop-file'", default=0)
-    range.add_argument('--start-datetime', dest='startTime', type=str,
-                       help="Start reading the binlog at first event having a datetime equal or posterior to "
-                            "the argument; the argument must be a date and time in the local time zone, "
-                            "in any format accepted by the MySQL server for DATETIME and TIMESTAMP types, "
-                            "for example: 2004-12-25 11:25:56 (you should probably use quotes for your shell "
-                            "to set it properly).",
-                       default='')
-    range.add_argument('--stop-datetime', dest='stopTime', type=str,
-                       help="Stop reading the binlog at first event having a datetime equal or posterior to "
-                            "the argument; the argument must be a date and time in the local time zone, "
-                            "in any format accepted by the MySQL server for DATETIME and TIMESTAMP types, "
-                            "for example: 2004-12-25 11:25:56 (you should probably use quotes for your shell "
-                            "to set it properly).",
-                       default='')
-    parser.add_argument('--stop-never', dest='stopnever', action='store_true',
-                        help='Wait for more data from the server. default: stop replicate at the last binlog '
-                             'when you start binlog2sql',
-                        default=False)
-
-    parser.add_argument('--help', dest='help', action='store_true', help='help infomation', default=False)
 
     schema = parser.add_argument_group('schema filter')
     schema.add_argument('-d', '--databases', dest='databases', type=str, nargs='*',
                         help='dbs you want to process', default='')
     schema.add_argument('-t', '--tables', dest='tables', type=str, nargs='*',
                         help='tables you want to process', default='')
-    parser.add_argument('-f', '--file-path', dest='file_path', type=str, nargs='*', help='binlog file path', default='')
 
-    # exclusive = parser.add_mutually_exclusive_group()
-    parser.add_argument('-K', '--no-primary-key', dest='nopk', action='store_true',
+    interval = parser.add_argument_group('interval filter')
+    interval.add_argument('--start-position', '--start-pos', dest='start_pos', type=int,
+                          help='Start position of the --start-file', default=4)
+    interval.add_argument('--stop-position', '--end-pos', dest='end_pos', type=int,
+                          help="Stop position of --stop-file. default: latest position of '--stop-file'", default=0)
+    interval.add_argument('--start-datetime', dest='start_time', type=str,
+                          help="Start reading the binlog at first event having a datetime equal or posterior to "
+                               "the argument; the argument must be a date and time in the local time zone, "
+                               "in any format accepted by the MySQL server for DATETIME and TIMESTAMP types, "
+                               "for example: 2004-12-25 11:25:56 (you should probably use quotes for your shell "
+                               "to set it properly).",
+                          default='')
+    interval.add_argument('--stop-datetime', dest='stop_time', type=str,
+                          help="Stop reading the binlog at first event having a datetime equal or posterior to "
+                               "the argument; the argument must be a date and time in the local time zone, "
+                               "in any format accepted by the MySQL server for DATETIME and TIMESTAMP types, "
+                               "for example: 2004-12-25 11:25:56 (you should probably use quotes for your shell "
+                               "to set it properly).",
+                          default='')
+
+    parser.add_argument('--help', dest='help', action='store_true', help='help infomation', default=False)
+    parser.add_argument('--stop-never', dest='stop_never', action='store_true',
+                        help='Wait for more data from the server. default: stop replicate at the last binlog '
+                             'when you start binlog2sql',
+                        default=False)
+    parser.add_argument('-K', '--no-primary-key', dest='no_pk', action='store_true',
                         help='Generate insert sql without primary key if exists', default=False)
     parser.add_argument('-B', '--flashback', dest='flashback', action='store_true',
                         help='Flashback data to start_postition of start_file', default=False)
+
+    binlog_file_filter = parser.add_argument_group('binlog file filter')
+    binlog_file_filter.add_argument('-f', '--file-path', dest='file_path', type=str, nargs='*',
+                                    help='Binlog file path. Please give us absolute path'
+                                         'you can also use with binlog file dir by filename.', default=[])
+    binlog_file_filter.add_argument('-fd', '--file-dir', dest='file_dir', type=str,
+                                    help='Binlog file dir. Please give us absolute path', default='')
+    binlog_file_filter.add_argument('-fr', '--file-regex', dest='file_regex', type=str,
+                                    help="Binlog file regex, use to find binlog file in file dir. "
+                                         "(default is: mysql-bin.\\d+)",
+                                    default='mysql-bin.\\d+')
+    binlog_file_filter.add_argument('--start-file', dest='start_file', type=str,
+                                    help='Start file in binlog file dir', default='')
+    binlog_file_filter.add_argument('--stop-file', dest='stop_file', type=str,
+                                    help='Stop file in binlog file dir', default='')
+    binlog_file_filter.add_argument('--check', dest='check', action='store_true',
+                                    help='Check binlog file list if you want', default=False)
     return parser
 
 
@@ -383,15 +398,16 @@ def command_line_args(args):
     if args.help or need_print_help:
         parser.print_help()
         sys.exit(1)
-    if args.flashback and args.stopnever:
+    if args.flashback and args.stop_never:
         raise ValueError('Only one of flashback or stop-never can be True')
-    if args.flashback and args.nopk:
+    if args.flashback and args.no_pk:
         raise ValueError('Only one of flashback or nopk can be True')
-    if (args.startTime and not is_valid_datetime(args.startTime)) or (
-            args.stopTime and not is_valid_datetime(args.stopTime)):
+    if (args.start_time and not is_valid_datetime(args.start_time)) or (
+            args.stop_time and not is_valid_datetime(args.stop_time)):
         raise ValueError('Incorrect datetime argument')
-    if not args.password:
-        args.password = getpass.getpass()
-    else:
-        args.password = args.password[0]
+    if not args.check:
+        if not args.password:
+            args.password = getpass.getpass()
+        else:
+            args.password = args.password[0]
     return args
