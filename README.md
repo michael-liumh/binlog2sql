@@ -2,6 +2,8 @@
 ==============
 使用说明请参考：https://github.com/danfengcao/binlog2sql
 
+[备份](./source_file/README.md)
+
 安装
 ==============
 ```shell
