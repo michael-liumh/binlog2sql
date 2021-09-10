@@ -69,7 +69,7 @@ class BinLogFileReader(object):
         self._ctl_connection = None
         self._ctl_connection_settings = ctl_connection_settings
         if ctl_connection_settings:
-            self._ctl_connection_settings.setdefault("charset", "utf8")
+            self._ctl_connection_settings.setdefault("charset", "utf8mb4")
 
         self.__only_tables = only_tables
         self.__ignored_tables = ignored_tables
@@ -361,6 +361,12 @@ def parse_args():
                                "for example: 2004-12-25 11:25:56 (you should probably use quotes for your shell "
                                "to set it properly).",
                           default='')
+
+    event = parser.add_argument_group('type filter')
+    event.add_argument('--only-dml', dest='only_dml', action='store_true', default=False,
+                       help='only print dml, ignore ddl')
+    event.add_argument('--sql-type', dest='sql_type', type=str, nargs='*', default=['INSERT', 'UPDATE', 'DELETE'],
+                       help='Sql type you want to process, support INSERT, UPDATE, DELETE.')
 
     parser.add_argument('--help', dest='help', action='store_true', help='help infomation', default=False)
     parser.add_argument('--stop-never', dest='stop_never', action='store_true',
