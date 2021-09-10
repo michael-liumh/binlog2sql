@@ -212,7 +212,7 @@ Empty set (0.00 sec)
 
 * 纯Python开发，安装与使用都很简单
 * 自带flashback、no-primary-key解析模式，无需再装补丁
-* flashback模式下，更适合[闪回实战](./example/mysql-flashback-priciple-and-practice.md)
+* flashback模式下，更适合[闪回实战](../example/mysql-flashback-priciple-and-practice.md)
 * 解析为标准SQL，方便理解、筛选
 * 代码容易改造，可以支持更多个性化解析
 
@@ -224,6 +224,7 @@ Empty set (0.00 sec)
 * [陈路炳](https://github.com/bingluchen) bug报告(字段值为空时的处理)，使用体验
 * [dba-jane](https://github.com/DBA-jane) pymysqlreplication时间字段浮点数bug #29
 * [lujinke](https://github.com/lujinke) bug报告(set字段的处理 #32)
+* [Michael Liu](https://github.com/Michaelsky0913) 添加json、binary数据类型支持，添加本地binlog文件解析
 
 ### 联系我
 
