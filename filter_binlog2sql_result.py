@@ -111,18 +111,23 @@ def fix_json_col(col_list):
     json_mark_right_cnt = 0
     json_col = ''
     col_list_new = []
-    for i, col in enumerate(col_list):
+    for col in col_list:
         if re.search('{', col) is not None:
-            json_mark_left_cnt += 1
-            json_col += col
-            continue
-        elif json_mark_left_cnt != json_mark_right_cnt:
+            json_mark_left_cnt += col.count('{')
             if re.search('}', col) is not None:
-                json_mark_right_cnt += 1
+                json_mark_right_cnt += col.count('}')
             json_col += col
             if json_mark_left_cnt == json_mark_right_cnt:
                 col_list_new.append(json_col[:-1])
-                # json_col = ''
+                json_col = ''
+            continue
+        elif json_mark_left_cnt != json_mark_right_cnt:
+            if re.search('}', col) is not None:
+                json_mark_right_cnt += col.count('}')
+            json_col += col
+            if json_mark_left_cnt == json_mark_right_cnt:
+                col_list_new.append(json_col[:-1])
+                json_col = ''
             continue
         else:
             col_list_new.append(col.replace(',', ''))
@@ -140,7 +145,6 @@ def filter_update(sql: str, primary_key: str = None, keep_col_list: list = None)
     if primary_key not in keep_col_list:
         keep_col_list.append(primary_key)
 
-    # update_col_list = list(map(lambda s: s.replace(',', ''), sql.split('WHERE')[0].split()))
     sql_split = sql.split('WHERE')
     update_col_list = sql_split[0].split()
     if "{" in str(update_col_list):
