@@ -106,6 +106,9 @@ def read_file(filename, is_yield=False):
 
 
 def fix_json_col(col_list):
+    """
+    col_list must split with space, not comma
+    """
     # 左括号数量 与 右括号数量
     json_mark_left_cnt = 0
     json_mark_right_cnt = 0
