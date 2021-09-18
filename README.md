@@ -1,13 +1,11 @@
 使用说明
 ==============
-使用说明请参考：https://github.com/danfengcao/binlog2sql
-
-[备份](./source_file/README.md)
+[使用说明](./source_file/README.md)
 
 安装
 ==============
 ```shell
-git clone https://github.com/Michaelsky0913/binlog2sql.git && \
+git clone https://github.com/michael-liumh/binlog2sql.git && \
 cd binlog2sql && \
 pip3 install -r requirements.txt
 ```

@@ -24,7 +24,7 @@ binlog2sql
 ==============
 
 ```shell
-git clone https://github.com/Michaelsky0913/binlog2sql.git && \
+git clone https://github.com/michael-liumh/binlog2sql.git && \
 cd binlog2sql && \
 pip3 install -r requirements.txt
 ```
@@ -224,11 +224,11 @@ Empty set (0.00 sec)
 * [陈路炳](https://github.com/bingluchen) bug报告(字段值为空时的处理)，使用体验
 * [dba-jane](https://github.com/DBA-jane) pymysqlreplication时间字段浮点数bug #29
 * [lujinke](https://github.com/lujinke) bug报告(set字段的处理 #32)
-* [Michael Liu](https://github.com/Michaelsky0913) 添加json、binary数据类型支持，添加本地binlog文件解析
+* [michael-liumh](https://github.com/michael-liumh) 添加json、binary数据类型支持，添加本地binlog文件解析
 
 ### 联系我
 
-有任何问题，请与我联系。邮箱：[danfengcao.info@gmail.com](danfengcao.info@gmail.com)
+有任何问题，请与我联系。邮箱：[2678692691@qq.com](2678692691@qq.com)
 
 欢迎提问题提需求，欢迎pull requests！
 
