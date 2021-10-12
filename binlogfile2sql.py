@@ -123,7 +123,7 @@ def main(args):
     connection_settings = {'host': args.host, 'port': args.port, 'user': args.user, 'passwd': args.password}
     binlog_file_list = []
     if args.file_dir and not args.file_path:
-        for f in os.listdir(args.file_dir):
+        for f in sorted(os.listdir(args.file_dir)):
             if args.start_file and f < args.start_file:
                 continue
             if args.stop_file and f > args.stop_file:
