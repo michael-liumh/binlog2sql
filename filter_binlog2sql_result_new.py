@@ -2,6 +2,7 @@
 # -*- coding:utf8 -*-
 
 import argparse
+import json
 import sys
 import os
 import chardet
@@ -111,8 +112,10 @@ def fix_json_col(col_list):
     json_mark_right_cnt = 0
     json_col = ''
     col_list_new = []
-    last_col = ''
     for i, col in enumerate(col_list):
+        if isinstance(col, str):
+            col = col.strip()
+
         if i < 3:
             col_list_new.append(col)
             continue
@@ -121,7 +124,7 @@ def fix_json_col(col_list):
             json_mark_left_cnt += col.count('{')
             if re.search('}', col) is not None:
                 json_mark_right_cnt += col.count('}')
-            json_col += col
+            json_col += col + ','
             if json_mark_left_cnt == json_mark_right_cnt:
                 col_list_new.append(json_col[:-1])
                 json_col = ''
@@ -129,26 +132,45 @@ def fix_json_col(col_list):
         elif json_mark_left_cnt != json_mark_right_cnt:
             if re.search('}', col) is not None:
                 json_mark_right_cnt += col.count('}')
-            json_col += col
+            json_col += col + ','
             if json_mark_left_cnt == json_mark_right_cnt:
                 col_list_new.append(json_col[:-1])
                 json_col = ''
             continue
         else:
-            if re.match('^`[a-zA-Z].*', col) is not None:
-                if col[-1] == ',':
-                    col_list_new.append(col[:-1])
-                else:
-                    last_col = col
-            else:
-                last_col += ' '
-                if col[-1] == ',':
-                    last_col += col[:-1]
-                    col_list_new.append(last_col)
-                    last_col = ''
-                else:
-                    last_col += col
+            col_list_new.append(col)
     return col_list_new
+
+
+def col_list_to_dict(col_list):
+    col_dict = {}
+    others = []
+    for col in col_list:
+        if '=' in col:
+            sep = '='
+            col_split = col.split('`=')
+            key = col_split[0] + '`'
+            value = col_split[1]
+        elif 'IS NULL' in col:
+            sep = ' IS '
+            col_split = col.split()
+            key = col_split[0]
+            value = col_split[-1]
+        else:
+            others.append(col)
+            key = ''
+            value = ''
+            sep = ''
+        key_strip = key.strip()
+        if key_strip and key_strip not in col_dict:
+            col_dict[key_strip] = {
+                'key': key_strip,
+                'sep': sep,
+                'value': value.strip(),
+            }
+    if others:
+        logger.error(others)
+    return col_dict
 
 
 def filter_update(sql: str, primary_key: str = None, keep_col_list: list = None) -> str:
@@ -163,55 +185,54 @@ def filter_update(sql: str, primary_key: str = None, keep_col_list: list = None)
         keep_col_list.append(primary_key)
 
     sql_split = sql.split('WHERE')
-    update_col_list = sql_split[0].split()
+    update_col_part = sql_split[0]
+    where_col_part = sql_split[1]
+    begin_idx = update_col_part.find('SET')
+    update_prefix = update_col_part[:begin_idx + 3]
+    update_suffix = update_col_part[begin_idx + 3:]
+    update_col_list = update_suffix.split(',')
     if "{" in str(update_col_list):
         update_col_list = fix_json_col(update_col_list)
-    else:
-        update_col_list = list(map(lambda s: s.replace(',', ''), update_col_list))
+    update_col_dict = col_list_to_dict(update_col_list)
+    # print(json.dumps(update_col_dict, indent=4))
 
-    where_col_list = list(map(lambda s: s.strip().replace(', ', ',').replace(': ', ':'), sql_split[1].split('AND')))
-    limit_idx = where_col_list[-1].find('LIMIT 1')
+    where_col_list = list(map(lambda s: s.strip(), where_col_part.split(' AND ')))
+    limit_idx = where_col_list[-1].find('LIMIT')
     comment_idx = where_col_list[-1].find('#')
     comment = '; ' + where_col_list[-1][comment_idx:].strip() if comment_idx > 0 else ''
     where_col_list[-1] = where_col_list[-1][:limit_idx].strip()
+    where_col_dict = col_list_to_dict(where_col_list)
+    # print(json.dumps(where_col_dict, indent=4))
 
     update_col_list_new, where_col_list_new = [], []
-    for new_value, old_value in zip(update_col_list[3:], where_col_list):
-        if 'NULL' in new_value and 'NULL' in old_value:
+    for key, new_value in update_col_dict.items():
+        old_value = where_col_dict.get(key, '')
+        # logger.info('new_value:%s old_value:%s %s' % (new_value['value'], old_value['value'],
+        #                                               old_value['value'] == new_value['value']))
+        if old_value and old_value['value'] == new_value['value']:
+            if key in keep_col_list:
+                where_col_list_new.append(old_value['sep'].join([key, old_value['value']]))
             continue
-        elif 'NULL' not in new_value and 'NULL' in old_value:
-            update_col_list_new.append(new_value)
-            continue
-        elif 'NULL' in new_value and 'NULL' not in old_value:
-            where_col_list_new.append(old_value)
-            if new_value.split('=')[0] != primary_key and new_value not in update_col_list_new:
-                update_col_list_new.append(new_value)
-            continue
+        if new_value['value'] != 'NULL' and key not in update_col_list_new:
+            update_col_list_new.append(new_value['sep'].join([key, new_value['value']]))
+        if old_value['value'] != 'NULL' and key not in where_col_list_new:
+            where_col_list_new.append(old_value['sep'].join([key, old_value['value']]))
 
-        if new_value != old_value:
-            if new_value not in update_col_list_new:
-                update_col_list_new.append(new_value)
-            if old_value not in where_col_list_new:
-                where_col_list_new.append(old_value)
-        else:
-            if (old_value.split('=')[0] in keep_col_list or old_value.split(' ')[0] in keep_col_list) \
-                    and old_value not in where_col_list_new:
-                where_col_list_new.append(old_value)
-
-    new_sql = " ".join(update_col_list[:3]) + ' ' + ','.join(update_col_list_new) + \
+    new_sql = "".join(update_prefix) + ' ' + ','.join(update_col_list_new) + \
               ' WHERE ' + ' AND '.join(where_col_list_new) + comment
     return new_sql
 
 
 def get_file_lines(filename):
     logger.info('getting file %s lines' % filename)
-    cnt = 0
-    with open(filename, encoding='utf8') as f:
-        while True:
-            buffer = f.read(4096)
-            if not buffer:
-                break
-            cnt += buffer.count('\n')
+    # cnt = 0
+    # with open(filename, encoding='utf8') as f:
+    #     while True:
+    #         buffer = f.read(4096)
+    #         if not buffer:
+    #             break
+    #         cnt += buffer.count('\n')
+    cnt = os.popen('grep -Ev "^--|^#" %s | wc -l' % filename).read()
     return cnt
 
 
@@ -231,19 +252,26 @@ def main(args):
     info_format += '[Filtered line count: {cnt} / {sql_file_len}]'
 
     f = open(out_file, 'w', encoding='utf8') if out_file else ''
-    line = ''
     try:
         for line in read_file(sql_file, is_yield=True):
-            new_sql = filter_update(line, primary_key=primary_key, keep_col_list=keep_col_list)
+            if line.startswith('--') or line.startswith('#'):
+                logger.warning('Ignore comment line')
+                new_sql = line
+            else:
+                new_sql = filter_update(line, primary_key=primary_key, keep_col_list=keep_col_list)
+
             if f:
                 f.write(new_sql + '\n')
             else:
                 print(new_sql)
+
             cnt += 1
             if (cnt % 10000) == 0:
                 logger.info(info_format.format(cnt=cnt, sql_file_len=sql_file_len))
+
         logger.info(info_format.format(cnt=cnt, sql_file_len=sql_file_len))
         logger.info(finished_info)
+
         if out_file:
             logger.warning("The result saved in %s" % out_file)
     except Exception as e:
