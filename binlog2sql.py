@@ -106,21 +106,14 @@ class Binlog2sql(object):
                     for row in binlog_event.rows:
                         sql = concat_sql_from_binlog_event(cursor=cursor, binlog_event=binlog_event, no_pk=self.no_pk,
                                                            row=row, flashback=self.flashback, e_start_pos=e_start_pos)
-                        if self.flashback:
-                            try:
-                                if sql:
-                                    print(sql)
-                                    # f_tmp.write(sql + '\n')
-                            except Exception as e:
-                                logger.error(e)
-                                continue
-                        else:
-                            try:
-                                if sql:
-                                    print(sql)
-                            except Exception as e:
-                                logger.error(e)
-                                continue
+                        try:
+                            if sql:
+                                print(sql)
+                                # f_tmp.write(sql + '\n')
+                        except Exception:
+                            logger.exception('')
+                            logger.error('Error sql: %s' % sql)
+                            continue
 
                 if not (isinstance(binlog_event, RotateEvent) or isinstance(binlog_event, FormatDescriptionEvent)):
                     last_pos = binlog_event.packet.log_pos

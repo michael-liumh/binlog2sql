@@ -8,7 +8,6 @@ import datetime
 import getpass
 import json
 import logging
-import colorlog
 from contextlib import contextmanager
 from pymysqlreplication.event import QueryEvent
 from pymysqlreplication.row_event import (
@@ -43,14 +42,17 @@ def set_log_format():
     }
 
     # set logger format
-    log_format = colorlog.ColoredFormatter(
+    console_format = colorlog.ColoredFormatter(
         "%(log_color)s[%(asctime)s] [%(module)s:%(funcName)s] [%(lineno)d] [%(levelname)s] %(message)s",
         log_colors=log_colors_config
+    )
+    logfile_format = logging.Formatter(
+        "[%(asctime)s] [%(module)s:%(funcName)s] [%(lineno)d] [%(levelname)s] %(message)s"
     )
 
     # add console handler
     console_handler = logging.StreamHandler()
-    console_handler.setFormatter(log_format)
+    console_handler.setFormatter(console_format)
     logger.addHandler(console_handler)
 
     # add rotate file handler
@@ -59,12 +61,13 @@ def set_log_format():
     if not os.path.isdir(logs_dir):
         os.makedirs(logs_dir, exist_ok=True)
 
-    logfile = logs_dir + os.sep + sys.argv[0].split(os.sep)[-1].split('.')[0] + '.log'
+    sep = '/' if '/' in sys.argv[0] else os.sep
+    logfile = logs_dir + sep + sys.argv[0].split(sep)[-1].split('.')[0] + '.log'
     file_maxsize = 1024 * 1024 * 100  # 100m
     # logfile_size = os.path.getsize(logfile) if os.path.exists(logfile) else 0
 
     file_handler = logging.handlers.RotatingFileHandler(logfile, maxBytes=file_maxsize, backupCount=10)
-    file_handler.setFormatter(log_format)
+    file_handler.setFormatter(logfile_format)
     logger.addHandler(file_handler)
 
 
