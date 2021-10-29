@@ -8,6 +8,7 @@ import datetime
 import getpass
 import json
 import logging
+import chardet
 from contextlib import contextmanager
 from pymysqlreplication.event import QueryEvent
 from pymysqlreplication.row_event import (
@@ -23,7 +24,7 @@ else:
 
 # create a logger
 logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 
 def set_log_format():
@@ -186,7 +187,10 @@ def compare_items(items):
 
 def fix_object_bytes(value: bytes):
     try:
-        return value.decode('utf-8')
+        encoding = chardet.detect(value).get('encoding', '')
+        if not encoding:
+            encoding = 'utf8'
+        return value.decode(encoding)
     except Exception:
         value = '0x' + value.hex().upper()
         return value
@@ -270,7 +274,7 @@ def handle_list(value: list):
     for v in value:
         if isinstance(v, dict):
             try:
-                v = json.dumps(v)
+                v = json.dumps(v, ensure_ascii=False)
             except Exception as e:
                 logger.error("Failed to dump dict value to string. Error is:" + str(e))
                 logger.error("Error value is:" + str(v))
