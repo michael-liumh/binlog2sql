@@ -30,7 +30,7 @@ git与pip的安装问题请自行搜索解决。
     * ---> 
     * update t1 set c1=100 where id=100 and c1=99
   * 用法：
-    * python3 filter_binlog2sql_result.py -s 1.sql -o 2.sql
+    * python3 filter_binlog2sql_result.py -f 1.sql -o 2.sql
 * 添加对 blob 数据类型的支持（包括 binary、varbinary 等二进制类型）
 * 添加 binlog file 的解析支持
 * 添加 binlog file dir，可指定解析某个目录下特定的几个 binlog file
