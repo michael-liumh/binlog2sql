@@ -23,7 +23,7 @@ else:
 
 # create a logger
 logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
 
 def set_log_format():
@@ -185,8 +185,11 @@ def compare_items(items):
 
 
 def fix_object_bytes(value: bytes):
-    value = '0x' + value.hex().upper()
-    return value
+    try:
+        return value.decode('utf-8')
+    except Exception:
+        value = '0x' + value.hex().upper()
+        return value
 
 
 def fix_object_array(value: list):
