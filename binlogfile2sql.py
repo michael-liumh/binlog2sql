@@ -4,6 +4,8 @@
 import datetime
 import os
 import sys
+import time
+
 import pymysql
 import re
 from binlogfile2sql_util import command_line_args, BinLogFileReader
@@ -19,8 +21,8 @@ from pymysqlreplication.row_event import (
 
 class BinlogFile2sql(object):
     def __init__(self, file_path, connection_settings, start_pos=None, end_pos=None, start_time=None,
-                 stop_time=None, only_schemas=None, only_tables=None, no_pk=False, flashback=False, stop_never=False,
-                 only_dml=True, sql_type=None):
+                 stop_time=None, only_schemas=None, only_tables=None, no_pk=False, flashback=False,
+                 only_dml=True, sql_type=None, result_dir=None, stop_never=False, need_comment=1):
         """
         connection_settings: {'host': 127.0.0.1, 'port': 3306, 'user': slave, 'passwd': slave}
         """
@@ -46,6 +48,9 @@ class BinlogFile2sql(object):
         self.binlog_file_list = []
         self.connection = pymysql.connect(**self.connection_settings)
 
+        self.result_dir = result_dir
+        self.need_comment = need_comment
+
     def process_binlog(self):
         stream = BinLogFileReader(self.file_path, ctl_connection_settings=self.connection_settings,
                                   log_pos=self.start_pos, only_schemas=self.only_schemas,
@@ -54,22 +59,18 @@ class BinlogFile2sql(object):
         cur = self.connection.cursor()
         # to simplify code, we do not use file lock for tmp_file.
         tmp_file = create_unique_file('%s.%s' % (self.connection_settings['host'], self.connection_settings['port']))
+        if self.stop_never:
+            sep = '/' if '/' in sys.argv[0] else os.sep
+            result_sql_file = self.file_path.split(sep)[-1].replace('.', '_').replace('-', '_') + '.sql'
+            result_sql_file = os.path.join(self.result_dir, result_sql_file)
+            f_result_sql_file = open(result_sql_file, 'a')
+        else:
+            f_result_sql_file = ''
         f_tmp = open(tmp_file, "w")
         flag_last_event = False
         e_start_pos, last_pos = stream.log_pos, stream.log_pos
         try:
             for binlog_event in stream:
-                if not self.stop_never:
-                    if datetime.datetime.fromtimestamp(binlog_event.timestamp) < self.start_time:
-                        if not (isinstance(binlog_event, RotateEvent) or
-                                isinstance(binlog_event, FormatDescriptionEvent)):
-                            last_pos = binlog_event.packet.log_pos
-                        continue
-                    elif datetime.datetime.fromtimestamp(binlog_event.timestamp) >= self.stop_time:
-                        break
-                    else:
-                        pass
-
                 if isinstance(binlog_event, QueryEvent) and binlog_event.query == 'BEGIN':
                     e_start_pos = last_pos
 
@@ -77,22 +78,35 @@ class BinlogFile2sql(object):
                     sql = concat_sql_from_binlog_event(cursor=cur, binlog_event=binlog_event,
                                                        flashback=self.flashback, no_pk=self.no_pk)
                     if sql:
-                        print(sql)
+                        if self.need_comment != 1:
+                            sql = re.sub('; #.*', ';', sql)
+                        if f_result_sql_file:
+                            f_result_sql_file.write(sql + '\n')
+                        else:
+                            print(sql)
                 elif is_dml_event(binlog_event) and event_type(binlog_event) in self.sql_type:
                     for row in binlog_event.rows:
                         sql = concat_sql_from_binlog_event(cursor=cur, binlog_event=binlog_event, row=row,
                                                            flashback=self.flashback, no_pk=self.no_pk,
                                                            e_start_pos=e_start_pos)
-                        if self.flashback:
-                            f_tmp.write(sql + '\n')
-                        else:
-                            print(sql)
+                        if sql:
+                            if self.need_comment != 1:
+                                sql = re.sub('; #.*', ';', sql)
+                            if self.flashback:
+                                f_tmp.write(sql + '\n')
+                            else:
+                                if f_result_sql_file:
+                                    f_result_sql_file.write(sql + '\n')
+                                else:
+                                    print(sql)
 
                 if not (isinstance(binlog_event, RotateEvent) or isinstance(binlog_event, FormatDescriptionEvent)):
                     last_pos = binlog_event.packet.log_pos
                 if flag_last_event:
                     break
             f_tmp.close()
+            if f_result_sql_file:
+                f_result_sql_file.close()
 
             if self.flashback:
                 self.print_rollback_sql(tmp_file)
@@ -119,9 +133,25 @@ class BinlogFile2sql(object):
         pass
 
 
-def main(args):
-    connection_settings = {'host': args.host, 'port': args.port, 'user': args.user, 'passwd': args.password}
+def read_file(filename):
+    if not os.path.exists(filename):
+        print(filename + " does not exists!!!")
+        return []
+
+    with open(filename, 'r', encoding='utf8') as f:
+        return list(map(lambda s: s.strip('\n'), f.readlines()))
+
+
+def save_executed_result(result_file, result_list):
+    result_list = list(map(lambda s: s + '\n', result_list))
+    with open(result_file, 'w', encoding='utf8') as f:
+        f.writelines(result_list)
+    return
+
+
+def get_binlog_file_list(args):
     binlog_file_list = []
+    executed_file_list = read_file(args.result_file) if args.stop_never and os.path.exists(args.result_file) else []
     if args.file_dir and not args.file_path:
         for f in sorted(os.listdir(args.file_dir)):
             if args.start_file and f < args.start_file:
@@ -130,6 +160,10 @@ def main(args):
                 break
             if re.search(args.file_regex, f) is not None:
                 binlog_file = os.path.join(args.file_dir, f)
+                if args.stop_never and \
+                        (int(time.time() - os.path.getmtime(binlog_file)) < args.minutes_ago * 60 or
+                         binlog_file in executed_file_list):
+                    continue
                 binlog_file_list.append(binlog_file)
     else:
         for f in args.file_path:
@@ -139,24 +173,50 @@ def main(args):
                 else:
                     binlog_file = f
                 binlog_file_list.append(binlog_file)
+    return binlog_file_list, executed_file_list
+
+
+def main(args):
+    connection_settings = {'host': args.host, 'port': args.port, 'user': args.user, 'passwd': args.password}
+    binlog_file_list, executed_file_list = get_binlog_file_list(args)
 
     if args.check:
         from pprint import pprint
         pprint(binlog_file_list)
         sys.exit(1)
 
-    for binlog_file in binlog_file_list:
-        logger.info('parsing binlog file: %s' % binlog_file)
-        bin2sql = BinlogFile2sql(file_path=binlog_file, connection_settings=connection_settings,
-                                 start_pos=args.start_pos, end_pos=args.end_pos,
-                                 start_time=args.start_time, stop_time=args.stop_time,
-                                 only_schemas=args.databases,
-                                 only_tables=args.tables, no_pk=args.no_pk, flashback=args.flashback,
-                                 stop_never=args.stop_never, only_dml=args.only_dml, sql_type=args.sql_type)
-        bin2sql.process_binlog()
+    if not args.stop_never:
+        for binlog_file in binlog_file_list:
+            logger.info('parsing binlog file: %s' % binlog_file)
+            bin2sql = BinlogFile2sql(file_path=binlog_file, connection_settings=connection_settings,
+                                     start_pos=args.start_pos, end_pos=args.end_pos,
+                                     start_time=args.start_time, stop_time=args.stop_time,
+                                     only_schemas=args.databases, need_comment=args.need_comment,
+                                     only_tables=args.tables, no_pk=args.no_pk, flashback=args.flashback,
+                                     only_dml=args.only_dml, sql_type=args.sql_type)
+            bin2sql.process_binlog()
+    else:
+        while True:
+            for binlog_file in binlog_file_list:
+                logger.info('parsing binlog file: %s' % binlog_file)
+                bin2sql = BinlogFile2sql(file_path=binlog_file, connection_settings=connection_settings,
+                                         start_pos=args.start_pos, end_pos=args.end_pos,
+                                         start_time=args.start_time, stop_time=args.stop_time,
+                                         only_schemas=args.databases, result_dir=args.result_dir,
+                                         only_tables=args.tables, no_pk=args.no_pk, flashback=args.flashback,
+                                         only_dml=args.only_dml, sql_type=args.sql_type, stop_never=args.stop_never,
+                                         need_comment=args.need_comment)
+                r = bin2sql.process_binlog()
+                if r is True:
+                    executed_file_list.append(binlog_file)
+                    save_executed_result(args.result_file, executed_file_list)
+            binlog_file_list, executed_file_list = get_binlog_file_list(args)
+            if not binlog_file_list:
+                # logger.info('All file has been executed, sleep 60 seconds to get other new files.')
+                time.sleep(60)
 
 
 if __name__ == '__main__':
-    args = command_line_args(sys.argv[1:])
+    command_line_args = command_line_args(sys.argv[1:])
     set_log_format()
-    main(args)
+    main(command_line_args)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
+import re
 import sys
 import datetime
 import pymysql
@@ -14,7 +14,8 @@ class Binlog2sql(object):
 
     def __init__(self, connection_settings, start_file=None, start_pos=None, end_file=None, end_pos=None,
                  start_time=None, stop_time=None, only_schemas=None, only_tables=None, no_pk=False,
-                 flashback=False, stop_never=False, back_interval=1.0, only_dml=True, sql_type=None):
+                 flashback=False, stop_never=False, back_interval=1.0, only_dml=True, sql_type=None,
+                 need_comment=1):
         """
         conn_setting: {'host': 127.0.0.1, 'port': 3306, 'user': user, 'passwd': passwd, 'charset': 'utf8'}
         """
@@ -44,6 +45,7 @@ class Binlog2sql(object):
 
         self.binlogList = []
         self.connection = pymysql.connect(**self.conn_setting)
+        self.need_comment = need_comment
         with self.connection as cursor:
             cursor.execute("SHOW MASTER STATUS")
             self.eof_file, self.eof_pos = cursor.fetchone()[:2]
@@ -101,6 +103,8 @@ class Binlog2sql(object):
                     sql = concat_sql_from_binlog_event(cursor=cursor, binlog_event=binlog_event,
                                                        flashback=self.flashback, no_pk=self.no_pk)
                     if sql:
+                        if self.need_comment != 1:
+                            sql = re.sub('; #.*', ';', sql)
                         print(sql)
                 elif is_dml_event(binlog_event) and event_type(binlog_event) in self.sql_type:
                     for row in binlog_event.rows:
@@ -108,6 +112,8 @@ class Binlog2sql(object):
                                                            row=row, flashback=self.flashback, e_start_pos=e_start_pos)
                         try:
                             if sql:
+                                if self.need_comment != 1:
+                                    sql = re.sub('; #.*', ';', sql)
                                 print(sql)
                                 # f_tmp.write(sql + '\n')
                         except Exception:
@@ -146,11 +152,13 @@ class Binlog2sql(object):
 
 if __name__ == '__main__':
     args = command_line_args(sys.argv[1:])
-    conn_setting = {'host': args.host, 'port': args.port, 'user': args.user, 'passwd': args.password, 'charset': 'utf8mb4'}
+    conn_setting = {'host': args.host, 'port': args.port, 'user': args.user, 'passwd': args.password,
+                    'charset': 'utf8mb4'}
     set_log_format()
     binlog2sql = Binlog2sql(connection_settings=conn_setting, start_file=args.start_file, start_pos=args.start_pos,
                             end_file=args.end_file, end_pos=args.end_pos, start_time=args.start_time,
                             stop_time=args.stop_time, only_schemas=args.databases, only_tables=args.tables,
                             no_pk=args.no_pk, flashback=args.flashback, stop_never=args.stop_never,
-                            back_interval=args.back_interval, only_dml=args.only_dml, sql_type=args.sql_type)
+                            back_interval=args.back_interval, only_dml=args.only_dml, sql_type=args.sql_type,
+                            need_comment=args.need_comment)
     binlog2sql.process_binlog()

@@ -131,6 +131,10 @@ def parse_args():
                         help="Continuously parse binlog. default: stop at the latest event when you start.")
     parser.add_argument('--help', dest='help', action='store_true', help='help information', default=False)
 
+    parser.add_argument('--need-comment', dest='need_comment', type=int, default=1,
+                        help='Choice need comment like [#start 268435860 end 268436724 time 2021-12-01 16:40:16] '
+                             'or not, 0 means not need, 1 means need')
+
     schema = parser.add_argument_group('schema filter')
     schema.add_argument('-d', '--databases', dest='databases', type=str, nargs='*',
                         help='dbs you want to process', default='')

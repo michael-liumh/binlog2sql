@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import os
 
 import pymysql
 import struct
@@ -369,10 +370,20 @@ def parse_args():
                        help='Sql type you want to process, support INSERT, UPDATE, DELETE.')
 
     parser.add_argument('--help', dest='help', action='store_true', help='help infomation', default=False)
-    parser.add_argument('--stop-never', dest='stop_never', action='store_true',
+    parser.add_argument('--stop-never', dest='stop_never', action='store_true', default=False,
                         help='Wait for more data from the server. default: stop replicate at the last binlog '
-                             'when you start binlog2sql',
-                        default=False)
+                             'when you start binlog2sql')
+    parser.add_argument('--result-file', dest='result_file', type=str, default='executed_files.txt',
+                        help='When you use --stop-never, we will save executed file in result_file')
+    parser.add_argument('--result-dir', dest='result_dir', type=str, default='./',
+                        help='When you use --stop-never, we will save result_file and '
+                             'result sql per file in result dir')
+    parser.add_argument('-ma', '--minutes-ago', dest='minutes_ago', type=int, default=3,
+                        help='When you use --stop-never, we only parse specify minutes ago of modify time of file.')
+    parser.add_argument('--need-comment', dest='need_comment', type=int, default=1,
+                        help='Choice need comment like [#start 268435860 end 268436724 time 2021-12-01 16:40:16] '
+                             'or not, 0 means not need, 1 means need')
+
     parser.add_argument('-K', '--no-primary-key', dest='no_pk', action='store_true',
                         help='Generate insert sql without primary key if exists', default=False)
     parser.add_argument('-B', '--flashback', dest='flashback', action='store_true',
@@ -416,4 +427,12 @@ def command_line_args(args):
             args.password = getpass.getpass()
         else:
             args.password = args.password[0]
+
+    if args.minutes_ago < 1:
+        logger.error('Args --minutes-ago must not lower than 1.')
+        sys.exit(1)
+
+    if args.stop_never and not os.path.exists(args.result_dir):
+        os.makedirs(args.result_dir, exist_ok=True)
+    args.result_file = os.path.join(args.result_dir, args.result_file)
     return args
