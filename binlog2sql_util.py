@@ -134,6 +134,8 @@ def parse_args():
     parser.add_argument('--need-comment', dest='need_comment', type=int, default=1,
                         help='Choice need comment like [#start 268435860 end 268436724 time 2021-12-01 16:40:16] '
                              'or not, 0 means not need, 1 means need')
+    parser.add_argument('--rename-db', dest='rename_db', type=str,
+                        help='Rename source dbs to one db.')
 
     schema = parser.add_argument_group('schema filter')
     schema.add_argument('-d', '--databases', dest='databases', type=str, nargs='*',
@@ -306,7 +308,8 @@ def fix_hex_values(sql: str):
     return new_sql
 
 
-def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=None, flashback=False, no_pk=False):
+def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=None, flashback=False, no_pk=False,
+                                 rename_db=None):
     if flashback and no_pk:
         raise ValueError('only one of flashback or no_pk can be True')
     if not (isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, UpdateRowsEvent)
@@ -317,7 +320,7 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
     if isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, UpdateRowsEvent) \
             or isinstance(binlog_event, DeleteRowsEvent):
         # 会调用 fix_object 函数生成sql
-        pattern = generate_sql_pattern(binlog_event, row=row, flashback=flashback, no_pk=no_pk)
+        pattern = generate_sql_pattern(binlog_event, row=row, flashback=flashback, no_pk=no_pk, rename_db=rename_db)
         
         # cursor.mogrify 处理 value 时，会返回一个字符串，如果 value 里包含 dict，则会报错
         if isinstance(pattern['values'], list):
@@ -341,26 +344,29 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
     return sql
 
 
-def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False):
+def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, rename_db=None):
     template = ''
     values = []
     if flashback is True:
         if isinstance(binlog_event, WriteRowsEvent):
+            db = rename_db if rename_db else binlog_event.schema
             template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
-                binlog_event.schema, binlog_event.table,
+                db, binlog_event.table,
                 ' AND '.join(map(compare_items, row['values'].items()))
             )
             values = map(fix_object, row['values'].values())
         elif isinstance(binlog_event, DeleteRowsEvent):
+            db = rename_db if rename_db else binlog_event.schema
             template = 'INSERT INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
-                binlog_event.schema, binlog_event.table,
+                db, binlog_event.table,
                 ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
                 ', '.join(['%s'] * len(row['values']))
             )
             values = map(fix_object, row['values'].values())
         elif isinstance(binlog_event, UpdateRowsEvent):
+            db = rename_db if rename_db else binlog_event.schema
             template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
-                binlog_event.schema, binlog_event.table,
+                db, binlog_event.table,
                 ', '.join(['`%s`=%%s' % x for x in row['before_values'].keys()]),
                 ' AND '.join(map(compare_items, row['after_values'].items())))
             values = map(fix_object, list(row['before_values'].values())+list(row['after_values'].values()))
@@ -374,19 +380,22 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False):
                 if binlog_event.primary_key:
                     row['values'].pop(binlog_event.primary_key)
 
+            db = rename_db if rename_db else binlog_event.schema
             template = 'INSERT INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
-                binlog_event.schema, binlog_event.table,
+                db, binlog_event.table,
                 ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
                 ', '.join(['%s'] * len(row['values']))
             )
             values = map(fix_object, row['values'].values())
         elif isinstance(binlog_event, DeleteRowsEvent):
+            db = rename_db if rename_db else binlog_event.schema
             template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
-                binlog_event.schema, binlog_event.table, ' AND '.join(map(compare_items, row['values'].items())))
+                db, binlog_event.table, ' AND '.join(map(compare_items, row['values'].items())))
             values = map(fix_object, row['values'].values())
         elif isinstance(binlog_event, UpdateRowsEvent):
+            db = rename_db if rename_db else binlog_event.schema
             template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
-                binlog_event.schema, binlog_event.table,
+                db, binlog_event.table,
                 ', '.join(['`%s`=%%s' % k for k in row['after_values'].keys()]),
                 ' AND '.join(map(compare_items, row['before_values'].items()))
             )

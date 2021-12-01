@@ -383,6 +383,8 @@ def parse_args():
     parser.add_argument('--need-comment', dest='need_comment', type=int, default=1,
                         help='Choice need comment like [#start 268435860 end 268436724 time 2021-12-01 16:40:16] '
                              'or not, 0 means not need, 1 means need')
+    parser.add_argument('--rename-db', dest='rename_db', type=str,
+                        help='Rename source dbs to one db.')
 
     parser.add_argument('-K', '--no-primary-key', dest='no_pk', action='store_true',
                         help='Generate insert sql without primary key if exists', default=False)
