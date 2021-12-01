@@ -67,6 +67,7 @@ class BinlogFile2sql(object):
             result_sql_file = os.path.join(self.result_dir, result_sql_file)
             f_result_sql_file = open(result_sql_file, 'a')
         else:
+            result_sql_file = ''
             f_result_sql_file = ''
         f_tmp = open(tmp_file, "w")
         flag_last_event = False
@@ -113,6 +114,14 @@ class BinlogFile2sql(object):
 
             if self.flashback:
                 self.print_rollback_sql(tmp_file)
+        except KeyboardInterrupt:
+            if result_sql_file:
+                logger.exception('Got KeyboardInterrupt signal, delete result sql file')
+                os.remove(result_sql_file)
+                sys.exit(1)
+            else:
+                logger.exception('')
+                sys.exit(1)
         finally:
             os.remove(tmp_file)
         cur.close()
