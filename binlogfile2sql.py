@@ -5,18 +5,26 @@ import datetime
 import os
 import sys
 import time
-
 import pymysql
 import re
 from binlogfile2sql_util import command_line_args, BinLogFileReader
 from binlog2sql_util import concat_sql_from_binlog_event, create_unique_file, reversed_lines, is_dml_event, \
     event_type, logger, set_log_format
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent
-from pymysqlreplication.row_event import (
-    WriteRowsEvent,
-    UpdateRowsEvent,
-    DeleteRowsEvent,
-)
+from signal import signal, SIGHUP, SIGTERM
+
+result_sql_file = ''
+f_result_sql_file = ''
+
+
+def exit_handler(sig, frame):
+    if result_sql_file:
+        logger.exception('Got KeyboardInterrupt signal, delete result sql file')
+        os.remove(result_sql_file)
+        sys.exit(1)
+    else:
+        logger.exception('')
+        sys.exit(1)
 
 
 class BinlogFile2sql(object):
@@ -62,13 +70,12 @@ class BinlogFile2sql(object):
         # to simplify code, we do not use file lock for tmp_file.
         tmp_file = create_unique_file('%s.%s' % (self.connection_settings['host'], self.connection_settings['port']))
         if self.stop_never:
+            global result_sql_file, f_result_sql_file
+
             sep = '/' if '/' in sys.argv[0] else os.sep
             result_sql_file = self.file_path.split(sep)[-1].replace('.', '_').replace('-', '_') + '.sql'
             result_sql_file = os.path.join(self.result_dir, result_sql_file)
             f_result_sql_file = open(result_sql_file, 'a')
-        else:
-            result_sql_file = ''
-            f_result_sql_file = ''
         f_tmp = open(tmp_file, "w")
         flag_last_event = False
         e_start_pos, last_pos = stream.log_pos, stream.log_pos
@@ -185,6 +192,11 @@ def get_binlog_file_list(args):
                 else:
                     binlog_file = f
                 binlog_file_list.append(binlog_file)
+
+    for f in executed_file_list.copy():
+        if not os.path.exists(f):
+            executed_file_list.remove(f)
+
     return binlog_file_list, executed_file_list
 
 
@@ -231,4 +243,7 @@ def main(args):
 if __name__ == '__main__':
     command_line_args = command_line_args(sys.argv[1:])
     set_log_format()
+    if command_line_args.stop_never:
+        signal(SIGHUP, exit_handler)
+        signal(SIGTERM, exit_handler)
     main(command_line_args)
