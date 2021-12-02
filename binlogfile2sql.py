@@ -68,7 +68,8 @@ class BinlogFile2sql(object):
 
         cur = self.connection.cursor()
         # to simplify code, we do not use file lock for tmp_file.
-        tmp_file = create_unique_file('%s.%s' % (self.connection_settings['host'], self.connection_settings['port']))
+        tmp_file = create_unique_file('%s.%s' % (self.connection_settings['host'], self.connection_settings['port']),
+                                      path=os.path.dirname(os.path.abspath(__file__)))
         if self.stop_never:
             global result_sql_file, f_result_sql_file
 

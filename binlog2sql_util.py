@@ -80,7 +80,7 @@ def is_valid_datetime(string):
         return False
 
 
-def create_unique_file(filename):
+def create_unique_file(filename, path=None):
     version = 0
     result_file = filename
     # if we have to try more than 1000 times, something is seriously wrong
@@ -89,6 +89,8 @@ def create_unique_file(filename):
         version += 1
     if version >= 1000:
         raise OSError('cannot create unique file %s.[0-1000]' % filename)
+    if path:
+        result_file = os.path.join(path, result_file)
     return result_file
 
 
