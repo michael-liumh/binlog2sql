@@ -28,9 +28,9 @@ def exit_handler(sig, frame):
 
 
 class BinlogFile2sql(object):
-    def __init__(self, file_path, connection_settings, start_pos=None, end_pos=None, start_time=None,
-                 stop_time=None, only_schemas=None, only_tables=None, no_pk=False, flashback=False,
-                 only_dml=True, sql_type=None, result_dir=None, stop_never=False, need_comment=1,
+    def __init__(self, file_path, connection_settings, start_pos=None, end_pos=None,
+                 start_time=None, stop_time=None, only_schemas=None, only_tables=None, no_pk=False,
+                 flashback=False, stop_never=False,  only_dml=True, sql_type=None, result_dir=None, need_comment=1,
                  rename_db=None):
         """
         connection_settings: {'host': 127.0.0.1, 'port': 3306, 'user': slave, 'passwd': slave}
@@ -64,7 +64,7 @@ class BinlogFile2sql(object):
     def process_binlog(self):
         stream = BinLogFileReader(self.file_path, ctl_connection_settings=self.connection_settings,
                                   log_pos=self.start_pos, only_schemas=self.only_schemas,
-                                  only_tables=self.only_tables, resume_stream=True)
+                                  only_tables=self.only_tables, resume_stream=True, blocking=True)
 
         cur = self.connection.cursor()
         # to simplify code, we do not use file lock for tmp_file.
@@ -81,6 +81,22 @@ class BinlogFile2sql(object):
         e_start_pos, last_pos = stream.log_pos, stream.log_pos
         try:
             for binlog_event in stream:
+                if not self.stop_never:
+                    try:
+                        event_time = datetime.datetime.fromtimestamp(binlog_event.timestamp)
+                    except OSError:
+                        event_time = datetime.datetime(1980, 1, 1, 0, 0)
+                    if event_time < self.start_time:
+                        if not (isinstance(binlog_event, RotateEvent)
+                                or isinstance(binlog_event, FormatDescriptionEvent)):
+                            last_pos = binlog_event.packet.log_pos
+                        continue
+                    elif (self.end_pos and stream.log_pos > self.end_pos) or \
+                            (event_time >= self.stop_time):
+                        break
+                    # else:
+                    #     raise ValueError('unknown binlog file or position')
+
                 if isinstance(binlog_event, QueryEvent) and binlog_event.query == 'BEGIN':
                     e_start_pos = last_pos
 

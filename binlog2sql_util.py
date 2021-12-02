@@ -291,6 +291,15 @@ def handle_list(value: list):
     return new_list
 
 
+def fix_json_array(value: list):
+    new_list = []
+    for v in value:
+        if isinstance(v, list):
+            v = str(v)
+        new_list.append(v)
+    return new_list
+
+
 def fix_hex_values(sql: str):
     begin = 0
     new_sql = ''
@@ -325,6 +334,7 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
         # cursor.mogrify 处理 value 时，会返回一个字符串，如果 value 里包含 dict，则会报错
         if isinstance(pattern['values'], list):
             pattern_values = handle_list(pattern['values'])
+            pattern_values = fix_json_array(pattern_values)
         else:
             pattern_values = pattern['values']
         sql = cursor.mogrify(pattern['template'], pattern_values)

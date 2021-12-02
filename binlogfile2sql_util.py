@@ -66,7 +66,10 @@ class BinLogFileReader(object):
         self._file_path = file_path
         self._pos = None
 
+        self.__connected_stream = False
         self.__connected_ctl = False
+        self.__resume_stream = resume_stream
+        self.__blocking = blocking
         self._ctl_connection = None
         self._ctl_connection_settings = ctl_connection_settings
         if ctl_connection_settings:
