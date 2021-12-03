@@ -61,6 +61,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Parse MySQL Connect Settings', add_help=False,
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--help', dest='help', action='store_true', help='help information', default=False)
+    parser.add_argument('--flashback', dest='flashback', action='store_true', default=False,
+                        help='get flashback filtered sql(only work in update sql)')
+    parser.add_argument('--full-flashback', dest='full_flashback', action='store_true', default=False,
+                        help='get full flashback sql(not filter, only work in update sql)')
 
     parser.add_argument('-f', '--file', dest='sql_file', type=str,
                         help='sql file you want to filter', default='')
@@ -173,7 +177,14 @@ def col_list_to_dict(col_list):
     return col_dict
 
 
-def filter_update(sql: str, primary_key: str = None, keep_col_list: list = None) -> str:
+def get_file_lines(filename):
+    logger.info('getting file %s lines' % filename)
+    cnt = os.popen('grep -Ev "^--|^#" %s | wc -l' % filename).read().strip('\n')
+    return cnt
+
+
+def filter_update(sql: str, primary_key: str = None, keep_col_list: list = None, flashback: bool = False,
+                  full_flashback: bool = False) -> str:
     if not sql.strip().startswith('UPDATE'):
         return sql
 
@@ -207,25 +218,42 @@ def filter_update(sql: str, primary_key: str = None, keep_col_list: list = None)
     update_col_list_new, where_col_list_new = [], []
     for key, new_value in update_col_dict.items():
         old_value = where_col_dict.get(key, '')
-        # logger.info('new_value:%s old_value:%s %s' % (new_value['value'], old_value['value'],
-        #                                               old_value['value'] == new_value['value']))
+        if full_flashback:
+            update_col_list_new.append('='.join([key, old_value['value']]))
+            where_col_list_new.append(old_value['sep'].join([key, new_value['value']]))
+            continue
+
         if old_value and old_value['value'] == new_value['value']:
             if key in keep_col_list:
                 where_col_list_new.append(old_value['sep'].join([key, old_value['value']]))
             continue
         if old_value['value'] == 'NULL' and new_value['value'] != 'NULL':
-            update_col_list_new.append(new_value['sep'].join([key, new_value['value']]))
-            where_col_list_new.append(old_value['sep'].join([key, old_value['value']]))
+            if flashback:
+                update_col_list_new.append('='.join([key, old_value['value']]))
+                where_col_list_new.append(old_value['sep'].join([key, new_value['value']]))
+            else:
+                update_col_list_new.append('='.join([key, new_value['value']]))
+                where_col_list_new.append(old_value['sep'].join([key, old_value['value']]))
             continue
         elif old_value['value'] != 'NULL' and new_value['value'] == 'NULL':
-            update_col_list_new.append('='.join([key, new_value['value']]))
-            where_col_list_new.append(old_value['sep'].join([key, old_value['value']]))
+            if flashback:
+                update_col_list_new.append('='.join([key, old_value['value']]))
+                where_col_list_new.append(old_value['sep'].join([key, new_value['value']]))
+            else:
+                update_col_list_new.append('='.join([key, new_value['value']]))
+                where_col_list_new.append(old_value['sep'].join([key, old_value['value']]))
             continue
 
         if new_value['value'] != 'NULL' and key not in update_col_list_new:
-            update_col_list_new.append('='.join([key, new_value['value']]))
+            if flashback:
+                update_col_list_new.append('='.join([key, old_value['value']]))
+            else:
+                update_col_list_new.append('='.join([key, new_value['value']]))
         if old_value['value'] != 'NULL' and key not in where_col_list_new:
-            where_col_list_new.append(old_value['sep'].join([key, old_value['value']]))
+            if flashback:
+                where_col_list_new.append(old_value['sep'].join([key, new_value['value']]))
+            else:
+                where_col_list_new.append(old_value['sep'].join([key, old_value['value']]))
 
     new_sql = "".join(update_prefix) + ' ' + ','.join(update_col_list_new) + \
               ' WHERE ' + ' AND '.join(where_col_list_new) + comment
@@ -234,16 +262,21 @@ def filter_update(sql: str, primary_key: str = None, keep_col_list: list = None)
     return new_sql
 
 
-def get_file_lines(filename):
-    logger.info('getting file %s lines' % filename)
-    cnt = os.popen('grep -Ev "^--|^#" %s | wc -l' % filename).read().strip('\n')
-    return cnt
+def filter_sql(sql, primary_key: str = None, keep_col_list: list = None, flashback: bool = False,
+               full_flashback: bool = False) -> str:
+    if sql.strip().startswith('UPDATE'):
+        sql = filter_update(sql, primary_key, keep_col_list, flashback, full_flashback)
+    return sql
 
 
 def main(args, sql=None):
     if sql:
-        new_sql = filter_update(sql, primary_key='`id`')
-        print(new_sql)
+        new_sql = filter_sql(sql, primary_key='`id`')
+        print('filter result: ', new_sql, '\n')
+        new_sql = filter_sql(sql, primary_key='`id`', flashback=True)
+        print('filter flashback result: ', new_sql, '\n')
+        new_sql = filter_sql(sql, primary_key='`id`', full_flashback=True)
+        print('filter full flashback result: ', new_sql, '\n')
         return
 
     sql_file = args.sql_file
@@ -267,7 +300,8 @@ def main(args, sql=None):
                 logger.warning('Ignore comment line')
                 new_sql = line
             else:
-                new_sql = filter_update(line, primary_key=primary_key, keep_col_list=keep_col_list)
+                new_sql = filter_sql(line, primary_key=primary_key, keep_col_list=keep_col_list,
+                                     flashback=args.flashback, full_flashback=args.full_flashback)
 
             if f:
                 f.write(new_sql + '\n')

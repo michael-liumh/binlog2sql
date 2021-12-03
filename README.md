@@ -51,4 +51,3 @@ TODO
 - [x] 直接解析指定目录下binlog文件（可指定binlog目录前缀，排除非binlog文件）
 - [x] 修复 binlogfile2sql json 数据解析处理的SQL执行不了的 bug
 - [ ] 修复 binlogfile2sql start-position 参数不生效的 bug
-- [ ] 修复 binlogfile2sql flashback 参数不生效的 bug
