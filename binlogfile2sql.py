@@ -13,7 +13,9 @@ from binlog2sql_util import concat_sql_from_binlog_event, create_unique_file, re
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent
 from signal import signal, SIGHUP, SIGTERM
 
+# 提供给 stop never 存储每个 binlog 文件解析后的结果，一个 binlog 文件对应一个 结果文件
 result_sql_file = ''
+# 结果文件的游标
 f_result_sql_file = ''
 
 
@@ -68,16 +70,16 @@ class BinlogFile2sql(object):
 
         cur = self.connection.cursor()
         # to simplify code, we do not use file lock for tmp_file.
-        tmp_file = create_unique_file('%s.%s' % (self.connection_settings['host'], self.connection_settings['port']),
-                                      path=os.path.dirname(os.path.abspath(__file__)))
+        # tmp_file = create_unique_file('%s.%s' % (self.connection_settings['host'], self.connection_settings['port']),
+        #                               path=os.path.dirname(os.path.abspath(__file__)))
         if self.stop_never:
             global result_sql_file, f_result_sql_file
 
             sep = '/' if '/' in sys.argv[0] else os.sep
             result_sql_file = self.file_path.split(sep)[-1].replace('.', '_').replace('-', '_') + '.sql'
             result_sql_file = os.path.join(self.result_dir, result_sql_file)
-            f_result_sql_file = open(result_sql_file, 'a')
-        f_tmp = open(tmp_file, "w")
+            f_result_sql_file = open(result_sql_file, 'w')
+        # f_tmp = open(tmp_file, "w")
         flag_last_event = False
         e_start_pos, last_pos = stream.log_pos, stream.log_pos
         try:
@@ -120,24 +122,24 @@ class BinlogFile2sql(object):
                         if sql:
                             if self.need_comment != 1:
                                 sql = re.sub('; #.*', ';', sql)
-                            if self.flashback:
-                                f_tmp.write(sql + '\n')
+                            # if self.flashback:
+                            #     f_tmp.write(sql + '\n')
+                            # else:
+                            if f_result_sql_file:
+                                f_result_sql_file.write(sql + '\n')
                             else:
-                                if f_result_sql_file:
-                                    f_result_sql_file.write(sql + '\n')
-                                else:
-                                    print(sql)
+                                print(sql)
 
                 if not (isinstance(binlog_event, RotateEvent) or isinstance(binlog_event, FormatDescriptionEvent)):
                     last_pos = binlog_event.packet.log_pos
                 if flag_last_event:
                     break
-            f_tmp.close()
+            # f_tmp.close()
             if f_result_sql_file:
                 f_result_sql_file.close()
 
-            if self.flashback:
-                self.print_rollback_sql(tmp_file)
+            # if self.flashback:
+            #     self.print_rollback_sql(tmp_file)
         except KeyboardInterrupt:
             if result_sql_file:
                 logger.exception('Got KeyboardInterrupt signal, delete result sql file')
@@ -146,8 +148,8 @@ class BinlogFile2sql(object):
             else:
                 logger.exception('')
                 sys.exit(1)
-        finally:
-            os.remove(tmp_file)
+        # finally:
+        #     os.remove(tmp_file)
         cur.close()
         stream.close()
         return True
