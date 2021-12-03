@@ -11,22 +11,11 @@ from binlogfile2sql_util import command_line_args, BinLogFileReader
 from binlog2sql_util import concat_sql_from_binlog_event, create_unique_file, reversed_lines, is_dml_event, \
     event_type, logger, set_log_format
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent
-from signal import signal, SIGHUP, SIGTERM
 
 # 提供给 stop never 存储每个 binlog 文件解析后的结果，一个 binlog 文件对应一个 结果文件
 result_sql_file = ''
 # 结果文件的游标
 f_result_sql_file = ''
-
-
-def exit_handler(sig, frame):
-    if result_sql_file:
-        logger.exception('Got KeyboardInterrupt signal, delete result sql file')
-        os.remove(result_sql_file)
-        sys.exit(1)
-    else:
-        logger.exception('')
-        sys.exit(1)
 
 
 class BinlogFile2sql(object):
@@ -140,18 +129,10 @@ class BinlogFile2sql(object):
 
             # if self.flashback:
             #     self.print_rollback_sql(tmp_file)
-        except KeyboardInterrupt:
-            if result_sql_file:
-                logger.exception('Got KeyboardInterrupt signal, delete result sql file')
-                os.remove(result_sql_file)
-                sys.exit(1)
-            else:
-                logger.exception('')
-                sys.exit(1)
-        # finally:
-        #     os.remove(tmp_file)
-        cur.close()
-        stream.close()
+        finally:
+            stream.close()
+            cur.close()
+            # os.remove(tmp_file)
         return True
 
     def print_rollback_sql(self, fin):
@@ -262,7 +243,4 @@ def main(args):
 if __name__ == '__main__':
     command_line_args = command_line_args(sys.argv[1:])
     set_log_format()
-    if command_line_args.stop_never:
-        signal(SIGHUP, exit_handler)
-        signal(SIGTERM, exit_handler)
     main(command_line_args)
