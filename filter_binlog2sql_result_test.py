@@ -174,7 +174,7 @@ def col_list_to_dict(col_list):
 
 
 def filter_update(sql: str, primary_key: str = None, keep_col_list: list = None) -> str:
-    if not sql.startswith('UPDATE'):
+    if not sql.strip().startswith('UPDATE'):
         return sql
 
     if primary_key is None:
@@ -213,8 +213,17 @@ def filter_update(sql: str, primary_key: str = None, keep_col_list: list = None)
             if key in keep_col_list:
                 where_col_list_new.append(old_value['sep'].join([key, old_value['value']]))
             continue
-        if new_value['value'] != 'NULL' and key not in update_col_list_new:
+        if old_value['value'] == 'NULL' and new_value['value'] != 'NULL':
             update_col_list_new.append(new_value['sep'].join([key, new_value['value']]))
+            where_col_list_new.append(old_value['sep'].join([key, old_value['value']]))
+            continue
+        elif old_value['value'] != 'NULL' and new_value['value'] == 'NULL':
+            update_col_list_new.append('='.join([key, new_value['value']]))
+            where_col_list_new.append(old_value['sep'].join([key, old_value['value']]))
+            continue
+
+        if new_value['value'] != 'NULL' and key not in update_col_list_new:
+            update_col_list_new.append('='.join([key, new_value['value']]))
         if old_value['value'] != 'NULL' and key not in where_col_list_new:
             where_col_list_new.append(old_value['sep'].join([key, old_value['value']]))
 
@@ -231,7 +240,12 @@ def get_file_lines(filename):
     return cnt
 
 
-def main(args):
+def main(args, sql=None):
+    if sql:
+        new_sql = filter_update(sql, primary_key='`id`')
+        print(new_sql)
+        return
+
     sql_file = args.sql_file
     keep_col_list = args.keep_col_list
     primary_key = args.primary_key
@@ -277,7 +291,8 @@ def main(args):
 
 
 if __name__ == "__main__":
-    args = command_line_args(sys.argv[1:])
-    assert args.sql_file, "Missing sql file, we need [-f|--file] argument."
+    command_line_args = command_line_args(sys.argv[1:])
+    assert command_line_args.sql_file, "Missing sql file, we need [-f|--file] argument."
     set_log_format()
-    main(args)
+    test_sql = ''''''
+    main(command_line_args, sql=test_sql)
