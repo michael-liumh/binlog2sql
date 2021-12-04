@@ -11,6 +11,7 @@ from binlogfile2sql_util import command_line_args, BinLogFileReader
 from binlog2sql_util import concat_sql_from_binlog_event, create_unique_file, reversed_lines, is_dml_event, \
     event_type, logger, set_log_format
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent
+from datetime import datetime as dt
 
 # 提供给 stop never 存储每个 binlog 文件解析后的结果，一个 binlog 文件对应一个 结果文件
 result_sql_file = ''
@@ -200,6 +201,22 @@ def get_binlog_file_list(args):
     return binlog_file_list, executed_file_list
 
 
+def timestamp_to_datetime(ts: int, datetime_format: str = None) -> str:
+    """
+    将时间戳转换为指定格式的时间字符串
+    :param ts: 传入时间戳
+    :param datetime_format: 传入指定的时间格式
+    :return 指定格式的时间字符串
+    """
+    if datetime_format is None:
+        datetime_format = '%Y-%m-%d %H:%M:%S'
+
+    datetime_obj = dt.fromtimestamp(ts)
+    datetime_str = datetime_obj.strftime(datetime_format)
+
+    return datetime_str
+
+
 def main(args):
     connection_settings = {'host': args.host, 'port': args.port, 'user': args.user, 'passwd': args.password}
     binlog_file_list, executed_file_list = get_binlog_file_list(args)
@@ -211,7 +228,8 @@ def main(args):
 
     if not args.stop_never:
         for binlog_file in binlog_file_list:
-            logger.info('parsing binlog file: %s' % binlog_file)
+            logger.info('parsing binlog file: %s [%s]' %
+                        (binlog_file, timestamp_to_datetime(os.stat(binlog_file).st_mtime)))
             bin2sql = BinlogFile2sql(file_path=binlog_file, connection_settings=connection_settings,
                                      start_pos=args.start_pos, end_pos=args.end_pos,
                                      start_time=args.start_time, stop_time=args.stop_time,
@@ -222,7 +240,8 @@ def main(args):
     else:
         while True:
             for binlog_file in binlog_file_list:
-                logger.info('parsing binlog file: %s' % binlog_file)
+                logger.info('parsing binlog file: %s [%s]' %
+                            (binlog_file, timestamp_to_datetime(os.stat(binlog_file).st_mtime)))
                 bin2sql = BinlogFile2sql(file_path=binlog_file, connection_settings=connection_settings,
                                          start_pos=args.start_pos, end_pos=args.end_pos,
                                          start_time=args.start_time, stop_time=args.stop_time,
