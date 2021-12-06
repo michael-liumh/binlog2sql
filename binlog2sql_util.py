@@ -290,7 +290,13 @@ def handle_list(value: list):
                 logger.error("Error value is:" + str(v))
                 sys.exit(1)
         elif isinstance(v, list):
-            v = str(v)
+            if '{' in str(v):
+                try:
+                    v = json.dumps(v, ensure_ascii=False)
+                except:
+                    v = str(v)
+            else:
+                v = str(v)
         new_list.append(v)
     return new_list
 
