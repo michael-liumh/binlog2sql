@@ -372,7 +372,7 @@ def parse_args():
     event.add_argument('--sql-type', dest='sql_type', type=str, nargs='*', default=['INSERT', 'UPDATE', 'DELETE'],
                        help='Sql type you want to process, support INSERT, UPDATE, DELETE.')
 
-    parser.add_argument('--help', dest='help', action='store_true', help='help infomation', default=False)
+    parser.add_argument('--help', dest='help', action='store_true', help='help information', default=False)
     parser.add_argument('--stop-never', dest='stop_never', action='store_true', default=False,
                         help='Wait for more data from the server. default: stop replicate at the last binlog '
                              'when you start binlog2sql')
@@ -391,8 +391,10 @@ def parse_args():
 
     parser.add_argument('-K', '--no-primary-key', dest='no_pk', action='store_true',
                         help='Generate insert sql without primary key if exists', default=False)
+    event.add_argument('-KK', '--only-primary-key', dest='only_pk', action='store_true', default=False,
+                       help='Only key primary key condition when sql type is UPDATE and DELETE')
     parser.add_argument('-B', '--flashback', dest='flashback', action='store_true',
-                        help='Flashback data to start_postition of start_file', default=False)
+                        help='Flashback data to start_position of start_file', default=False)
 
     binlog_file_filter = parser.add_argument_group('binlog file filter')
     binlog_file_filter.add_argument('-f', '--file-path', dest='file_path', type=str, nargs='*',
