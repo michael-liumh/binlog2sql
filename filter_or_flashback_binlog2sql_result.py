@@ -62,7 +62,7 @@ def parse_args():
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--help', dest='help', action='store_true', help='help information', default=False)
     parser.add_argument('--flashback', dest='flashback', action='store_true', default=False,
-                        help='get flashback filtered sql(only work in update sql)')
+                        help='get flashback sql')
     parser.add_argument('--full-flashback', dest='full_flashback', action='store_true', default=False,
                         help='get full flashback sql(not filter, only work in update sql)')
 
@@ -84,6 +84,14 @@ def command_line_args(args):
     if args.help or need_print_help:
         parser.print_help()
         sys.exit(1)
+
+    if args.sql_file and not os.path.exists(args.sql_file):
+        logger.error(f'File {args.sql_file} does not exists')
+        sys.exit(1)
+    elif not args.sql_file:
+        logger.error('Missing sql file, we need [-f|--file] argument.')
+        sys.exit(1)
+
     return args
 
 
@@ -186,7 +194,7 @@ def get_file_lines(filename):
 def filter_update(sql: str, primary_key: str = None, keep_col_list: list = None, flashback: bool = False,
                   full_flashback: bool = False) -> str:
     if not sql.strip().startswith('UPDATE'):
-        return sql
+        return sql.strip()
 
     if primary_key is None:
         primary_key = '`id`'
@@ -259,24 +267,102 @@ def filter_update(sql: str, primary_key: str = None, keep_col_list: list = None,
               ' WHERE ' + ' AND '.join(where_col_list_new) + comment
     if '; #' not in new_sql:
         new_sql += ';'
-    return new_sql
+    return new_sql.strip()
+
+
+def flashback_delete_sql(sql, flashback: bool = False, full_flashback: bool = False):
+    if not sql.strip().upper().startswith('DELETE'):
+        logger.error(f'Line {sql} is not a delete sql.')
+        return sql.strip()
+
+    if not flashback and not full_flashback:
+        return sql.strip()
+
+    from_idx = sql.find('FROM')
+    where_idx = sql.find('WHERE')
+    table_name = sql[from_idx + 4: where_idx]
+    col_val_list = list(map(lambda s: s.strip(), sql[where_idx + 5:].split(' AND ')))
+    col_val_list_last = col_val_list[-1]
+
+    if 'LIMIT 1;' in col_val_list_last:
+        col_val_list[-1] = col_val_list_last.replace('LIMIT 1', '')
+        col_val_list_last = col_val_list[-1]
+
+    comment = ''
+    if '; #' in col_val_list_last:
+        comment_idx = col_val_list_last.find('; #')
+        comment = col_val_list_last[comment_idx + 2:]
+        col_val_list[-1] = col_val_list_last[:comment_idx]
+
+    col_part = ''
+    val_part = ''
+    for col_val in col_val_list:
+        try:
+            col, val = col_val.split('`=')
+            col_part += col + '`, '
+            val_part += val + ', '
+        except Exception as e:
+            logger.error(e)
+            logger.error(f'Error sql: {sql}')
+            sys.exit(1)
+    else:
+        col_part = col_part[:-2]
+        val_part = val_part[:-2]
+    new_sql = f'INSERT INTO {table_name} (' + col_part + ') VALUES (' + val_part + '); ' + comment
+    return new_sql.strip()
+
+
+def flashback_insert_sql(sql: str, flashback: bool = False, full_flashback: bool = False):
+    if not sql.strip().upper().startswith('INSERT'):
+        logger.error(f'Line {sql} is not a insert sql.')
+        return sql.strip()
+
+    if not flashback and not full_flashback:
+        return sql.strip()
+
+    sql = sql.replace('INSERT INTO', 'DELETE FROM')
+    col_begin_idx = sql.find('(`')
+    col_end_idx = sql.find('`)')
+    val_begin_idx = sql.rfind(' VALUES (')
+    val_end_idx = sql.rfind(');')
+    col_list = sql[col_begin_idx + 1: col_end_idx + 1].split(', ')
+    val_list = sql[val_begin_idx + 9: val_end_idx].split(', ')
+    comment = ''
+    if '; #' in sql:
+        comment_idx = sql.find('; #')
+        comment = sql[comment_idx + 2:]
+
+    new_sql = sql[:col_begin_idx] + 'WHERE '
+    for col, val in zip(col_list, val_list):
+        new_sql += col + '=' + val + ' AND '
+    else:
+        new_sql = new_sql[:-5].strip() + '; ' + comment
+    return new_sql.strip()
 
 
 def filter_sql(sql, primary_key: str = None, keep_col_list: list = None, flashback: bool = False,
                full_flashback: bool = False) -> str:
-    if sql.strip().startswith('UPDATE'):
+    if sql.strip()[:6].upper() not in ['INSERT', 'UPDATE', 'DELETE']:
+        logger.error(f'SQL [{sql}] is not a dml sql.')
+        return sql
+
+    if sql.strip().upper().startswith('UPDATE'):
         sql = filter_update(sql, primary_key, keep_col_list, flashback, full_flashback)
+    elif sql.strip().upper().startswith('DELETE'):
+        sql = flashback_delete_sql(sql, flashback, full_flashback)
+    else:
+        sql = flashback_insert_sql(sql, flashback, full_flashback)
     return sql
 
 
 def main(args, sql=None):
-    if sql:
+    if sql.strip():
         new_sql = filter_sql(sql, primary_key='`id`')
         print('filter result: ', new_sql, '\n')
         new_sql = filter_sql(sql, primary_key='`id`', flashback=True)
-        print('filter flashback result: ', new_sql, '\n')
+        print('flashback result: ', new_sql, '\n')
         new_sql = filter_sql(sql, primary_key='`id`', full_flashback=True)
-        print('filter full flashback result: ', new_sql, '\n')
+        print('full flashback result: ', new_sql, '\n')
         return
 
     sql_file = args.sql_file
@@ -325,8 +411,7 @@ def main(args, sql=None):
 
 
 if __name__ == "__main__":
-    command_line_args = command_line_args(sys.argv[1:])
-    assert command_line_args.sql_file, "Missing sql file, we need [-f|--file] argument."
     set_log_format()
+    command_line_args = command_line_args(sys.argv[1:])
     test_sql = ''''''
     main(command_line_args, sql=test_sql)
