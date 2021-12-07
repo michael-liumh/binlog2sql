@@ -51,7 +51,7 @@ class BinLogFileReader(object):
 
     def __init__(self, file_path, ctl_connection_settings=None, resume_stream=False,
                  blocking=False, only_events=None, log_file=None, log_pos=None,
-                 filter_non_implemented_events=True,
+                 filter_non_implemented_events=True, stop_pos=None,
                  ignored_events=None, auto_position=None,
                  only_tables=None, ignored_tables=None,
                  only_schemas=None, ignored_schemas=None,
@@ -92,6 +92,8 @@ class BinLogFileReader(object):
         # Store table meta information
         self.table_map = {}
         self.log_pos = log_pos
+        self.start_pos = log_pos
+        self.stop_pos = stop_pos
         self.log_file = log_file
         self.auto_position = auto_position
         self.skip_to_timestamp = skip_to_timestamp
@@ -198,8 +200,11 @@ class BinLogFileReader(object):
                                                self.__freeze_schema,
                                                self.__fail_on_table_metadata_unavailable)
 
-            if not binlog_event.event:
+            if not binlog_event.event or binlog_event.log_pos < self.start_pos:
                 continue
+
+            if self.stop_pos and binlog_event.log_pos >= self.stop_pos:
+                break
 
             if binlog_event.event_type == ROTATE_EVENT:
                 self.log_pos = binlog_event.event.position

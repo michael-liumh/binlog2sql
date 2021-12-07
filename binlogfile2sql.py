@@ -56,7 +56,7 @@ class BinlogFile2sql(object):
 
     def process_binlog(self):
         stream = BinLogFileReader(self.file_path, ctl_connection_settings=self.connection_settings,
-                                  log_pos=self.start_pos, only_schemas=self.only_schemas,
+                                  log_pos=self.start_pos, only_schemas=self.only_schemas, stop_pos=self.end_pos,
                                   only_tables=self.only_tables, resume_stream=True, blocking=True)
 
         cur = self.connection.cursor()
