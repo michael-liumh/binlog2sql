@@ -228,6 +228,10 @@ def main(args):
         pprint(binlog_file_list)
         sys.exit(1)
 
+    if not binlog_file_list:
+        logger.error('No file select.')
+        sys.exit(1)
+
     if not args.stop_never:
         for binlog_file in binlog_file_list:
             logger.info('parsing binlog file: %s [%s]' %
