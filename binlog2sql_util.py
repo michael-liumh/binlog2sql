@@ -142,8 +142,12 @@ def parse_args():
     schema = parser.add_argument_group('schema filter')
     schema.add_argument('-d', '--databases', dest='databases', type=str, nargs='*',
                         help='dbs you want to process', default='')
+    schema.add_argument('-id', '--ignore-databases', dest='ignore_databases', type=str, nargs='*',
+                        help='dbs you want to process', default='')
     schema.add_argument('-t', '--tables', dest='tables', type=str, nargs='*',
                         help='tables you want to process', default='')
+    schema.add_argument('-it', '--ignore-tables', dest='ignore_tables', type=str, nargs='*',
+                        help='tables you want to ignore', default='')
 
     event = parser.add_argument_group('type filter')
     event.add_argument('--only-dml', dest='only_dml', action='store_true', default=False,
@@ -316,7 +320,7 @@ def fix_hex_values(sql: str):
 
 
 def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=None, flashback=False, no_pk=False,
-                                 rename_db=None, only_pk=False):
+                                 rename_db=None, only_pk=False, only_result_sql=True):
     if flashback and no_pk:
         raise ValueError('only one of flashback or no_pk can be True')
     if not (isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, UpdateRowsEvent)
@@ -324,11 +328,13 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
         raise ValueError('binlog_event must be WriteRowsEvent, UpdateRowsEvent, DeleteRowsEvent or QueryEvent')
 
     sql = ''
+    db = ''
+    table = ''
     if isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, UpdateRowsEvent) \
             or isinstance(binlog_event, DeleteRowsEvent):
         # 会调用 fix_object 函数生成sql
-        pattern = generate_sql_pattern(binlog_event, row=row, flashback=flashback, no_pk=no_pk, rename_db=rename_db,
-                                       only_pk=only_pk)
+        pattern, db, table = generate_sql_pattern(binlog_event, row=row, flashback=flashback, no_pk=no_pk,
+                                                  rename_db=rename_db, only_pk=only_pk)
         
         # cursor.mogrify 处理 value 时，会返回一个字符串，如果 value 里包含 dict，则会报错
         if isinstance(pattern['values'], list):
@@ -349,12 +355,17 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
                 sql = 'USE {0};\n'.format(binlog_event.schema)
         sql += '{0};'.format(fix_object(binlog_event.query))
 
-    return sql
+    if not only_result_sql:
+        return sql, db, table
+    else:
+        return sql
 
 
 def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, rename_db=None, only_pk=False):
     template = ''
     values = []
+    db = binlog_event.schema
+    table = binlog_event.table
     if flashback is True:
         if isinstance(binlog_event, WriteRowsEvent):
             db = rename_db if rename_db else binlog_event.schema
@@ -448,7 +459,12 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                 )
                 values = map(fix_object, list(row['after_values'].values()) + list(pk_item.values()))
 
-    return {'template': template, 'values': list(values)}
+    result = (
+        {'template': template, 'values': list(values)},
+        db.replace('`', ''),
+        table.replace('`', '')
+    )
+    return result
 
 
 def reversed_lines(fin):

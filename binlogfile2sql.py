@@ -7,23 +7,20 @@ import sys
 import time
 import pymysql
 import re
-from binlogfile2sql_util import command_line_args, BinLogFileReader
-from binlog2sql_util import concat_sql_from_binlog_event, create_unique_file, reversed_lines, is_dml_event, \
-    event_type, logger, set_log_format
+from binlogfile2sql_util import command_line_args, BinLogFileReader, get_binlog_file_list, timestamp_to_datetime, \
+    save_executed_result, save_result_sql
+from binlog2sql_util import concat_sql_from_binlog_event, is_dml_event, event_type, logger, set_log_format
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent
-from datetime import datetime as dt
 
-# 提供给 stop never 存储每个 binlog 文件解析后的结果，一个 binlog 文件对应一个 结果文件
-result_sql_file = ''
-# 结果文件的游标
-f_result_sql_file = ''
+sep = '/' if '/' in sys.argv[0] else os.sep
 
 
 class BinlogFile2sql(object):
     def __init__(self, file_path, connection_settings, start_pos=None, end_pos=None,
                  start_time=None, stop_time=None, only_schemas=None, only_tables=None, no_pk=False,
-                 flashback=False, stop_never=False,  only_dml=True, sql_type=None, result_dir=None, need_comment=1,
-                 rename_db=None, only_pk=False):
+                 flashback=False, stop_never=False, only_dml=True, sql_type=None, result_dir=None, need_comment=1,
+                 rename_db=None, only_pk=False, result_file=None, table_per_file=False,
+                 ignore_databases=None, ignore_tables=None):
         """
         connection_settings: {'host': 127.0.0.1, 'port': 3306, 'user': slave, 'passwd': slave}
         """
@@ -53,24 +50,34 @@ class BinlogFile2sql(object):
         self.need_comment = need_comment
         self.rename_db = rename_db
         self.only_pk = only_pk
+        self.result_file = result_file
+        self.table_per_file = table_per_file
+        self.ignore_databases = ignore_databases
+        self.ignore_tables = ignore_tables
 
     def process_binlog(self):
         stream = BinLogFileReader(self.file_path, ctl_connection_settings=self.connection_settings,
                                   log_pos=self.start_pos, only_schemas=self.only_schemas, stop_pos=self.end_pos,
-                                  only_tables=self.only_tables, resume_stream=True, blocking=True)
-
+                                  only_tables=self.only_tables, ignored_schemas=self.ignore_databases,
+                                  ignored_tables=self.ignore_tables)
         cur = self.connection.cursor()
-        # to simplify code, we do not use file lock for tmp_file.
-        # tmp_file = create_unique_file('%s.%s' % (self.connection_settings['host'], self.connection_settings['port']),
-        #                               path=os.path.dirname(os.path.abspath(__file__)))
-        if self.stop_never:
-            global result_sql_file, f_result_sql_file
 
-            sep = '/' if '/' in sys.argv[0] else os.sep
+        result_sql_file = ''
+        f_result_sql_file = ''
+        if self.stop_never and not self.table_per_file:
             result_sql_file = self.file_path.split(sep)[-1].replace('.', '_').replace('-', '_') + '.sql'
             result_sql_file = os.path.join(self.result_dir, result_sql_file)
+        elif self.result_file and not self.table_per_file:
+            result_sql_file = self.result_file
+
+        if result_sql_file and not self.table_per_file:
+            save_result_sql(result_sql_file, '', 'w')
+            logger.info(f'Saving result into file: [{result_sql_file}]')
             f_result_sql_file = open(result_sql_file, 'w')
-        # f_tmp = open(tmp_file, "w")
+
+        if self.table_per_file:
+            logger.info(f'Saving table per result into dir: [{self.result_dir}]')
+
         flag_last_event = False
         e_start_pos, last_pos = stream.log_pos, stream.log_pos
         try:
@@ -95,30 +102,35 @@ class BinlogFile2sql(object):
                     e_start_pos = last_pos
 
                 if isinstance(binlog_event, QueryEvent) and not self.only_dml:
-                    sql = concat_sql_from_binlog_event(cursor=cur, binlog_event=binlog_event,
-                                                       flashback=self.flashback, no_pk=self.no_pk,
-                                                       rename_db=self.rename_db, only_pk=self.only_pk)
+                    sql, db, table = concat_sql_from_binlog_event(cursor=cur, binlog_event=binlog_event,
+                                                                  flashback=self.flashback, no_pk=self.no_pk,
+                                                                  rename_db=self.rename_db, only_pk=self.only_pk,
+                                                                  only_result_sql=False)
                     if sql:
                         if self.need_comment != 1:
                             sql = re.sub('; #.*', ';', sql)
                         if f_result_sql_file:
                             f_result_sql_file.write(sql + '\n')
+                        elif self.table_per_file and db and table:
+                            result_sql_file = os.path.join(self.result_dir, db + '.' + table + '.sql')
+                            save_result_sql(result_sql_file, sql + '\n')
                         else:
                             print(sql)
                 elif is_dml_event(binlog_event) and event_type(binlog_event) in self.sql_type:
                     for row in binlog_event.rows:
-                        sql = concat_sql_from_binlog_event(cursor=cur, binlog_event=binlog_event, row=row,
-                                                           flashback=self.flashback, no_pk=self.no_pk,
-                                                           e_start_pos=e_start_pos, rename_db=self.rename_db,
-                                                           only_pk=self.only_pk)
+                        sql, db, table = concat_sql_from_binlog_event(cursor=cur, binlog_event=binlog_event, row=row,
+                                                                      flashback=self.flashback, no_pk=self.no_pk,
+                                                                      e_start_pos=e_start_pos, rename_db=self.rename_db,
+                                                                      only_pk=self.only_pk, only_result_sql=False)
                         if sql:
                             if self.need_comment != 1:
                                 sql = re.sub('; #.*', ';', sql)
-                            # if self.flashback:
-                            #     f_tmp.write(sql + '\n')
-                            # else:
+
                             if f_result_sql_file:
                                 f_result_sql_file.write(sql + '\n')
+                            elif self.table_per_file and db and table:
+                                result_sql_file = os.path.join(self.result_dir, db + '.' + table + '.sql')
+                                save_result_sql(result_sql_file, sql + '\n')
                             else:
                                 print(sql)
 
@@ -126,97 +138,16 @@ class BinlogFile2sql(object):
                     last_pos = binlog_event.packet.log_pos
                 if flag_last_event:
                     break
-            # f_tmp.close()
+
+        finally:
             if f_result_sql_file:
                 f_result_sql_file.close()
-
-            # if self.flashback:
-            #     self.print_rollback_sql(tmp_file)
-        finally:
             stream.close()
             cur.close()
-            # os.remove(tmp_file)
         return True
-
-    def print_rollback_sql(self, fin):
-        """print rollback sql from tmp_file"""
-        with open(fin) as f_tmp:
-            sleep_interval = 1000
-            i = 0
-            for line in reversed_lines(f_tmp):
-                print(line.rstrip())
-                if i >= sleep_interval:
-                    print('SELECT SLEEP(1);')
-                    i = 0
-                else:
-                    i += 1
 
     def __del__(self):
         pass
-
-
-def read_file(filename):
-    if not os.path.exists(filename):
-        print(filename + " does not exists!!!")
-        return []
-
-    with open(filename, 'r', encoding='utf8') as f:
-        return list(map(lambda s: s.strip('\n'), f.readlines()))
-
-
-def save_executed_result(result_file, result_list):
-    result_list = list(map(lambda s: s + '\n', result_list))
-    with open(result_file, 'w', encoding='utf8') as f:
-        f.writelines(result_list)
-    return
-
-
-def get_binlog_file_list(args):
-    binlog_file_list = []
-    executed_file_list = read_file(args.result_file) if args.stop_never and os.path.exists(args.result_file) else []
-    if args.file_dir and not args.file_path:
-        for f in sorted(os.listdir(args.file_dir)):
-            if args.start_file and f < args.start_file:
-                continue
-            if args.stop_file and f > args.stop_file:
-                break
-            if re.search(args.file_regex, f) is not None:
-                binlog_file = os.path.join(args.file_dir, f)
-                if args.stop_never and \
-                        (int(time.time() - os.path.getmtime(binlog_file)) < args.minutes_ago * 60 or
-                         binlog_file in executed_file_list):
-                    continue
-                binlog_file_list.append(binlog_file)
-    else:
-        for f in args.file_path:
-            if re.search(args.file_regex, f) is not None:
-                if not f.startswith('/') and args.file_dir:
-                    binlog_file = os.path.join(args.file_dir, f)
-                else:
-                    binlog_file = f
-                binlog_file_list.append(binlog_file)
-
-    for f in executed_file_list.copy():
-        if not os.path.exists(f):
-            executed_file_list.remove(f)
-
-    return binlog_file_list, executed_file_list
-
-
-def timestamp_to_datetime(ts: int, datetime_format: str = None) -> str:
-    """
-    将时间戳转换为指定格式的时间字符串
-    :param ts: 传入时间戳
-    :param datetime_format: 传入指定的时间格式
-    :return 指定格式的时间字符串
-    """
-    if datetime_format is None:
-        datetime_format = '%Y-%m-%d %H:%M:%S'
-
-    datetime_obj = dt.fromtimestamp(ts)
-    datetime_str = datetime_obj.strftime(datetime_format)
-
-    return datetime_str
 
 
 def main(args):
@@ -242,7 +173,9 @@ def main(args):
                                      only_schemas=args.databases, need_comment=args.need_comment,
                                      only_tables=args.tables, no_pk=args.no_pk, flashback=args.flashback,
                                      only_dml=args.only_dml, sql_type=args.sql_type, rename_db=args.rename_db,
-                                     only_pk=args.only_pk)
+                                     only_pk=args.only_pk, result_file=args.result_file,
+                                     table_per_file=args.table_per_file, result_dir=args.result_dir,
+                                     ignore_databases=args.ignore_databases, ignore_tables=args.ignore_tables)
             bin2sql.process_binlog()
     else:
         while True:
@@ -256,11 +189,13 @@ def main(args):
                                          only_tables=args.tables, no_pk=args.no_pk, flashback=args.flashback,
                                          only_dml=args.only_dml, sql_type=args.sql_type, stop_never=args.stop_never,
                                          need_comment=args.need_comment, rename_db=args.rename_db,
-                                         only_pk=args.only_pk)
+                                         only_pk=args.only_pk, result_file=args.result_file,
+                                         table_per_file=args.table_per_file, ignore_databases=args.ignore_databases,
+                                         ignore_tables=args.ignore_tables)
                 r = bin2sql.process_binlog()
                 if r is True:
                     executed_file_list.append(binlog_file)
-                    save_executed_result(args.result_file, executed_file_list)
+                    save_executed_result(args.record_file, executed_file_list)
             binlog_file_list, executed_file_list = get_binlog_file_list(args)
             if not binlog_file_list:
                 # logger.info('All file has been executed, sleep 60 seconds to get other new files.')

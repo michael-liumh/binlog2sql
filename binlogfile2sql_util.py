@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 import os
-
+import re
+import time
 import pymysql
 import struct
 import argparse
 import getpass
 import sys
-
+from datetime import datetime as dt
 from pymysql.cursors import DictCursor
 from binlog2sql_util import is_valid_datetime, logger
 # from pymysql.constants.COMMAND import COM_BINLOG_DUMP, COM_REGISTER_SLAVE
@@ -335,6 +336,8 @@ class EventSizeTooSmallError(Exception):
 def parse_args():
     """parse args for binlog2sql"""
     parser = argparse.ArgumentParser(description='Parse MySQL binlog to SQL you want', add_help=False)
+    parser.add_argument('--help', dest='help', action='store_true', help='help information', default=False)
+
     connect_setting = parser.add_argument_group('connect setting')
     connect_setting.add_argument('-h', '--host', dest='host', type=str,
                                  help='Host the MySQL database server located', default='127.0.0.1')
@@ -348,8 +351,12 @@ def parse_args():
     schema = parser.add_argument_group('schema filter')
     schema.add_argument('-d', '--databases', dest='databases', type=str, nargs='*',
                         help='dbs you want to process', default='')
+    schema.add_argument('-id', '--ignore-databases', dest='ignore_databases', type=str, nargs='*',
+                        help='dbs you want to process', default='')
     schema.add_argument('-t', '--tables', dest='tables', type=str, nargs='*',
                         help='tables you want to process', default='')
+    schema.add_argument('-it', '--ignore-tables', dest='ignore_tables', type=str, nargs='*',
+                        help='tables you want to ignore', default='')
 
     interval = parser.add_argument_group('interval filter')
     interval.add_argument('--start-position', '--start-pos', dest='start_pos', type=int,
@@ -376,30 +383,34 @@ def parse_args():
                        help='only print dml, ignore ddl')
     event.add_argument('--sql-type', dest='sql_type', type=str, nargs='*', default=['INSERT', 'UPDATE', 'DELETE'],
                        help='Sql type you want to process, support INSERT, UPDATE, DELETE.')
-
-    parser.add_argument('--help', dest='help', action='store_true', help='help information', default=False)
-    parser.add_argument('--stop-never', dest='stop_never', action='store_true', default=False,
-                        help='Wait for more data from the server. default: stop replicate at the last binlog '
-                             'when you start binlog2sql')
-    parser.add_argument('--result-file', dest='result_file', type=str, default='executed_files.txt',
-                        help='When you use --stop-never, we will save executed file in result_file')
-    parser.add_argument('--result-dir', dest='result_dir', type=str, default='./',
-                        help='When you use --stop-never, we will save result_file and '
-                             'result sql per file in result dir')
-    parser.add_argument('-ma', '--minutes-ago', dest='minutes_ago', type=int, default=3,
-                        help='When you use --stop-never, we only parse specify minutes ago of modify time of file.')
-    parser.add_argument('--need-comment', dest='need_comment', type=int, default=1,
-                        help='Choice need comment like [#start 268435860 end 268436724 time 2021-12-01 16:40:16] '
-                             'or not, 0 means not need, 1 means need')
-    parser.add_argument('--rename-db', dest='rename_db', type=str,
-                        help='Rename source dbs to one db.')
-
-    parser.add_argument('-K', '--no-primary-key', dest='no_pk', action='store_true',
-                        help='Generate insert sql without primary key if exists', default=False)
+    event.add_argument('--stop-never', dest='stop_never', action='store_true', default=False,
+                       help='Wait for more data from the server. default: stop replicate at the last binlog '
+                            'when you start binlog2sql')
+    event.add_argument('-K', '--no-primary-key', dest='no_pk', action='store_true',
+                       help='Generate insert sql without primary key if exists', default=False)
     event.add_argument('-KK', '--only-primary-key', dest='only_pk', action='store_true', default=False,
                        help='Only key primary key condition when sql type is UPDATE and DELETE')
-    parser.add_argument('-B', '--flashback', dest='flashback', action='store_true',
-                        help='Flashback data to start_position of start_file', default=False)
+    event.add_argument('-B', '--flashback', dest='flashback', action='store_true',
+                       help='Flashback data to start_position of start_file', default=False)
+
+    result = parser.add_argument_group('result filter')
+    result.add_argument('--result-file', dest='result_file', type=str,
+                        help='If set, we will save result sql in this file instead print into stdout')
+    result.add_argument('--table-per-file', dest='table_per_file', action='store_true',
+                        help='If set, we will save result sql in table per file instead of result file', default=False)
+    result.add_argument('--clean', dest='clean', action='store_true',
+                        help='If set, we will clean result sql in table per file first time', default=False)
+    result.add_argument('--record-file', dest='record_file', type=str, default='executed_records.txt',
+                        help='When you use --stop-never, we will save executed record in this file')
+    result.add_argument('--result-dir', dest='result_dir', type=str, default='parsed_binlog_results/',
+                        help='Give a dir to save record_file and result_file in result dir')
+    result.add_argument('-ma', '--minutes-ago', dest='minutes_ago', type=int, default=3,
+                        help='When you use --stop-never, we only parse specify minutes ago of modify time of file.')
+    result.add_argument('--need-comment', dest='need_comment', type=int, default=1,
+                        help='Choice need comment like [#start 268435860 end 268436724 time 2021-12-01 16:40:16] '
+                             'or not, 0 means not need, 1 means need')
+    result.add_argument('--rename-db', dest='rename_db', type=str,
+                        help='Rename source dbs to one db.')
 
     binlog_file_filter = parser.add_argument_group('binlog file filter')
     binlog_file_filter.add_argument('-f', '--file-path', dest='file_path', type=str, nargs='*',
@@ -444,7 +455,80 @@ def command_line_args(args):
         logger.error('Args --minutes-ago must not lower than 1.')
         sys.exit(1)
 
-    if args.stop_never and not os.path.exists(args.result_dir):
+    if not os.path.exists(args.result_dir):
         os.makedirs(args.result_dir, exist_ok=True)
-    args.result_file = os.path.join(args.result_dir, args.result_file)
+    args.record_file = os.path.join(args.result_dir, args.record_file)
+
+    result_dir = os.path.dirname(args.result_file) if args.result_file else './'
+    if result_dir and not os.path.exists(result_dir):
+        os.makedirs(result_dir, exist_ok=True)
     return args
+
+
+def read_file(filename):
+    if not os.path.exists(filename):
+        print(filename + " does not exists!!!")
+        return []
+
+    with open(filename, 'r', encoding='utf8') as f:
+        return list(map(lambda s: s.strip('\n'), f.readlines()))
+
+
+def save_executed_result(result_file, result_list):
+    result_list = list(map(lambda s: s + '\n', result_list))
+    with open(result_file, 'w', encoding='utf8') as f:
+        f.writelines(result_list)
+    return
+
+
+def get_binlog_file_list(args):
+    binlog_file_list = []
+    executed_file_list = read_file(args.record_file) if args.stop_never and os.path.exists(args.record_file) else []
+    if args.file_dir and not args.file_path:
+        for f in sorted(os.listdir(args.file_dir)):
+            if args.start_file and f < args.start_file:
+                continue
+            if args.stop_file and f > args.stop_file:
+                break
+            if re.search(args.file_regex, f) is not None:
+                binlog_file = os.path.join(args.file_dir, f)
+                if args.stop_never and \
+                        (int(time.time() - os.path.getmtime(binlog_file)) < args.minutes_ago * 60 or
+                         binlog_file in executed_file_list):
+                    continue
+                binlog_file_list.append(binlog_file)
+    else:
+        for f in args.file_path:
+            if re.search(args.file_regex, f) is not None:
+                if not f.startswith('/') and args.file_dir:
+                    binlog_file = os.path.join(args.file_dir, f)
+                else:
+                    binlog_file = f
+                binlog_file_list.append(binlog_file)
+
+    for f in executed_file_list.copy():
+        if not os.path.exists(f):
+            executed_file_list.remove(f)
+
+    return binlog_file_list, executed_file_list
+
+
+def timestamp_to_datetime(ts: int, datetime_format: str = None) -> str:
+    """
+    将时间戳转换为指定格式的时间字符串
+    :param ts: 传入时间戳
+    :param datetime_format: 传入指定的时间格式
+    :return 指定格式的时间字符串
+    """
+    if datetime_format is None:
+        datetime_format = '%Y-%m-%d %H:%M:%S'
+
+    datetime_obj = dt.fromtimestamp(ts)
+    datetime_str = datetime_obj.strftime(datetime_format)
+
+    return datetime_str
+
+
+def save_result_sql(result_file, msg, mode='a', encoding='utf8'):
+    with open(result_file, mode=mode, encoding=encoding) as f:
+        f.write(msg)

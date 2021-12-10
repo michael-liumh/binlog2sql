@@ -6,8 +6,8 @@ import datetime
 import pymysql
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent
-from binlog2sql_util import command_line_args, concat_sql_from_binlog_event, create_unique_file, temp_open, \
-    reversed_lines, is_dml_event, event_type, logger, set_log_format
+from binlog2sql_util import command_line_args, concat_sql_from_binlog_event, is_dml_event, event_type, logger, \
+    set_log_format
 
 
 class Binlog2sql(object):
@@ -15,7 +15,7 @@ class Binlog2sql(object):
     def __init__(self, connection_settings, start_file=None, start_pos=None, end_file=None, end_pos=None,
                  start_time=None, stop_time=None, only_schemas=None, only_tables=None, no_pk=False,
                  flashback=False, stop_never=False, back_interval=1.0, only_dml=True, sql_type=None,
-                 need_comment=1, rename_db=None, only_pk=False):
+                 need_comment=1, rename_db=None, only_pk=False, ignore_databases=None, ignore_tables=None):
         """
         conn_setting: {'host': 127.0.0.1, 'port': 3306, 'user': user, 'passwd': passwd, 'charset': 'utf8'}
         """
@@ -48,6 +48,8 @@ class Binlog2sql(object):
         self.need_comment = need_comment
         self.rename_db = rename_db
         self.only_pk = only_pk
+        self.ignore_databases = ignore_databases
+        self.ignore_tables = ignore_tables
         with self.connection as cursor:
             cursor.execute("SHOW MASTER STATUS")
             self.eof_file, self.eof_pos = cursor.fetchone()[:2]
@@ -68,13 +70,11 @@ class Binlog2sql(object):
     def process_binlog(self):
         stream = BinLogStreamReader(connection_settings=self.conn_setting, server_id=self.server_id,
                                     log_file=self.start_file, log_pos=self.start_pos, only_schemas=self.only_schemas,
-                                    only_tables=self.only_tables, resume_stream=True, blocking=True)
+                                    only_tables=self.only_tables, resume_stream=True, blocking=True,
+                                    ignored_schemas=self.ignore_databases, ignored_tables=self.ignore_tables)
 
         flag_last_event = False
         e_start_pos, last_pos = stream.log_pos, stream.log_pos
-        # to simplify code, we do not use flock for tmp_file.
-        # tmp_file = create_unique_file('%s.%s' % (self.conn_setting['host'], self.conn_setting['port']))
-        # with temp_open(tmp_file, "w") as f_tmp, self.connection as cursor:
         with self.connection as cursor:
             for binlog_event in stream:
                 if not self.stop_never:
@@ -131,24 +131,7 @@ class Binlog2sql(object):
                     break
 
             stream.close()
-            # f_tmp.close()
-            # if self.flashback:
-            #     self.print_rollback_sql(filename=tmp_file)
         return True
-
-    def print_rollback_sql(self, filename):
-        """print rollback sql from tmp_file"""
-        with open(filename, "rb") as f_tmp:
-            batch_size = 4096
-            i = 0
-            for line in reversed_lines(f_tmp):
-                print(line.rstrip())
-                if i >= batch_size:
-                    i = 0
-                    if self.back_interval:
-                        print('SELECT SLEEP(%s);' % self.back_interval)
-                else:
-                    i += 1
 
     def __del__(self):
         pass
@@ -164,5 +147,6 @@ if __name__ == '__main__':
                             stop_time=args.stop_time, only_schemas=args.databases, only_tables=args.tables,
                             no_pk=args.no_pk, flashback=args.flashback, stop_never=args.stop_never,
                             back_interval=args.back_interval, only_dml=args.only_dml, sql_type=args.sql_type,
-                            need_comment=args.need_comment, rename_db=args.rename_db, only_pk=args.only_pk)
+                            need_comment=args.need_comment, rename_db=args.rename_db, only_pk=args.only_pk,
+                            ignore_databases=args.ignore_databases, ignore_tables=args.ignore_databases)
     binlog2sql.process_binlog()
