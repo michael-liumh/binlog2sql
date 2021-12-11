@@ -348,7 +348,7 @@ class EventSizeTooSmallError(Exception):
 def parse_args():
     """parse args for binlog2sql"""
     parser = argparse.ArgumentParser(description='Parse MySQL binlog to SQL you want', add_help=False,
-                                     formatter_class=argparse.RawTextHelpFormatter)
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--help', dest='help', action='store_true', help='help information', default=False)
 
     connect_setting = parser.add_argument_group('connect setting')
