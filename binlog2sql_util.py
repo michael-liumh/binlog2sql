@@ -330,7 +330,7 @@ def fix_hex_values(sql: str):
 
 def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=None, flashback=False, no_pk=False,
                                  rename_db=None, only_pk=False, only_return_sql=True, ignore_columns=None,
-                                 replace=False, insert_ignore=False):
+                                 replace=False, insert_ignore=False, ignore_virtual_columns=False):
     if flashback and no_pk:
         raise ValueError('only one of flashback or no_pk can be True')
     if not (isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, UpdateRowsEvent)
@@ -345,7 +345,8 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
         # 会调用 fix_object 函数生成sql
         pattern, db, table = generate_sql_pattern(
             binlog_event, row=row, flashback=flashback, no_pk=no_pk, rename_db=rename_db, only_pk=only_pk,
-            ignore_columns=ignore_columns, replace=replace, insert_ignore=insert_ignore
+            ignore_columns=ignore_columns, replace=replace, insert_ignore=insert_ignore,
+            ignore_virtual_columns=ignore_virtual_columns
         )
 
         # cursor.mogrify 处理 value 时，会返回一个字符串，如果 value 里包含 dict，则会报错
@@ -374,7 +375,7 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
 
 
 def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, rename_db=None, only_pk=False,
-                         ignore_columns=None, replace=False, insert_ignore=False):
+                         ignore_columns=None, replace=False, insert_ignore=False, ignore_virtual_columns=False):
     if ignore_columns and is_dml_event(binlog_event):
         if isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, DeleteRowsEvent):
             for k in row['values'].copy():
@@ -386,6 +387,18 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                     row['before_values'].pop(k)
             for k in row['after_values'].copy():
                 if k in ignore_columns:
+                    row['after_values'].pop(k)
+    elif ignore_virtual_columns and is_dml_event(binlog_event):
+        if isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, DeleteRowsEvent):
+            for k in row['values'].copy():
+                if re.search('__dropped_col_\d+__', k) is not None:
+                    row['values'].pop(k)
+        else:
+            for k in row['before_values'].copy():
+                if re.search('__dropped_col_\d+__', k) is not None:
+                    row['before_values'].pop(k)
+            for k in row['after_values'].copy():
+                if re.search('__dropped_col_\d+__', k) is not None:
                     row['after_values'].pop(k)
 
     template = ''

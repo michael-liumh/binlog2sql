@@ -20,7 +20,8 @@ class BinlogFile2sql(object):
                  start_time=None, stop_time=None, only_schemas=None, only_tables=None, no_pk=False,
                  flashback=False, stop_never=False, only_dml=True, sql_type=None, result_dir=None, need_comment=1,
                  rename_db=None, only_pk=False, result_file=None, table_per_file=False, insert_ignore=False,
-                 ignore_databases=None, ignore_tables=None, ignore_columns=None, replace=False):
+                 ignore_databases=None, ignore_tables=None, ignore_columns=None, replace=False,
+                 ignore_virtual_columns=False):
         """
         connection_settings: {'host': 127.0.0.1, 'port': 3306, 'user': slave, 'passwd': slave}
         """
@@ -57,12 +58,13 @@ class BinlogFile2sql(object):
         self.ignore_columns = ignore_columns
         self.replace = replace
         self.insert_ignore = insert_ignore
+        self.ignore_virtual_columns = ignore_virtual_columns
 
     def process_binlog(self):
         stream = BinLogFileReader(self.file_path, ctl_connection_settings=self.connection_settings,
                                   log_pos=self.start_pos, only_schemas=self.only_schemas, stop_pos=self.end_pos,
                                   only_tables=self.only_tables, ignored_schemas=self.ignore_databases,
-                                  ignored_tables=self.ignore_tables)
+                                  ignored_tables=self.ignore_tables, ignore_virtual_columns=self.ignore_virtual_columns)
         cur = self.connection.cursor()
 
         result_sql_file = ''
@@ -108,7 +110,8 @@ class BinlogFile2sql(object):
                     sql, db, table = concat_sql_from_binlog_event(
                         cursor=cur, binlog_event=binlog_event, flashback=self.flashback, no_pk=self.no_pk,
                         rename_db=self.rename_db, only_pk=self.only_pk, only_return_sql=False,
-                        ignore_columns=self.ignore_columns, replace=self.replace, insert_ignore=self.insert_ignore
+                        ignore_columns=self.ignore_columns, replace=self.replace, insert_ignore=self.insert_ignore,
+                        ignore_virtual_columns=self.ignore_virtual_columns
                     )
                     if sql:
                         if self.need_comment != 1:
@@ -126,7 +129,7 @@ class BinlogFile2sql(object):
                             cursor=cur, binlog_event=binlog_event, row=row, flashback=self.flashback, no_pk=self.no_pk,
                             e_start_pos=e_start_pos, rename_db=self.rename_db, only_pk=self.only_pk,
                             only_return_sql=False, ignore_columns=self.ignore_columns, replace=self.replace,
-                            insert_ignore=self.insert_ignore
+                            insert_ignore=self.insert_ignore, ignore_virtual_columns=self.ignore_virtual_columns
                         )
                         if sql:
                             if self.need_comment != 1:
@@ -173,34 +176,33 @@ def main(args):
         for binlog_file in binlog_file_list:
             logger.info('parsing binlog file: %s [%s]' %
                         (binlog_file, timestamp_to_datetime(os.stat(binlog_file).st_mtime)))
-            bin2sql = BinlogFile2sql(file_path=binlog_file, connection_settings=connection_settings,
-                                     start_pos=args.start_pos, end_pos=args.end_pos,
-                                     start_time=args.start_time, stop_time=args.stop_time,
-                                     only_schemas=args.databases, need_comment=args.need_comment,
-                                     only_tables=args.tables, no_pk=args.no_pk, flashback=args.flashback,
-                                     only_dml=args.only_dml, sql_type=args.sql_type, rename_db=args.rename_db,
-                                     only_pk=args.only_pk, result_file=args.result_file,
-                                     table_per_file=args.table_per_file, result_dir=args.result_dir,
-                                     ignore_databases=args.ignore_databases, ignore_tables=args.ignore_tables,
-                                     ignore_columns=args.ignore_columns, replace=args.replace,
-                                     insert_ignore=args.insert_ignore)
+            bin2sql = BinlogFile2sql(
+                file_path=binlog_file, connection_settings=connection_settings, start_pos=args.start_pos,
+                end_pos=args.end_pos, start_time=args.start_time, stop_time=args.stop_time, only_schemas=args.databases,
+                need_comment=args.need_comment, only_tables=args.tables, no_pk=args.no_pk, flashback=args.flashback,
+                only_dml=args.only_dml, sql_type=args.sql_type, rename_db=args.rename_db, only_pk=args.only_pk,
+                result_file=args.result_file, table_per_file=args.table_per_file, result_dir=args.result_dir,
+                ignore_databases=args.ignore_databases, ignore_tables=args.ignore_tables,
+                ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore,
+                ignore_virtual_columns=args.ignore_virtual_columns
+            )
             bin2sql.process_binlog()
     else:
         while True:
             for binlog_file in binlog_file_list:
                 logger.info('parsing binlog file: %s [%s]' %
                             (binlog_file, timestamp_to_datetime(os.stat(binlog_file).st_mtime)))
-                bin2sql = BinlogFile2sql(file_path=binlog_file, connection_settings=connection_settings,
-                                         start_pos=args.start_pos, end_pos=args.end_pos,
-                                         start_time=args.start_time, stop_time=args.stop_time,
-                                         only_schemas=args.databases, result_dir=args.result_dir,
-                                         only_tables=args.tables, no_pk=args.no_pk, flashback=args.flashback,
-                                         only_dml=args.only_dml, sql_type=args.sql_type, stop_never=args.stop_never,
-                                         need_comment=args.need_comment, rename_db=args.rename_db,
-                                         only_pk=args.only_pk, result_file=args.result_file,
-                                         table_per_file=args.table_per_file, ignore_databases=args.ignore_databases,
-                                         ignore_tables=args.ignore_tables, ignore_columns=args.ignore_columns,
-                                         replace=args.replace, insert_ignore=args.insert_ignore)
+                bin2sql = BinlogFile2sql(
+                    file_path=binlog_file, connection_settings=connection_settings, start_pos=args.start_pos,
+                    end_pos=args.end_pos, start_time=args.start_time, stop_time=args.stop_time,
+                    only_schemas=args.databases, result_dir=args.result_dir, only_tables=args.tables, no_pk=args.no_pk,
+                    flashback=args.flashback, only_dml=args.only_dml, sql_type=args.sql_type,
+                    stop_never=args.stop_never, need_comment=args.need_comment, rename_db=args.rename_db,
+                    only_pk=args.only_pk, result_file=args.result_file, table_per_file=args.table_per_file,
+                    ignore_databases=args.ignore_databases, ignore_tables=args.ignore_tables,
+                    ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore,
+                    ignore_virtual_columns=args.ignore_virtual_columns
+                )
                 r = bin2sql.process_binlog()
                 if r is True:
                     executed_file_list.append(binlog_file)

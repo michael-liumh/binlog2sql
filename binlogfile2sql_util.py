@@ -50,17 +50,11 @@ class BinLogFileReader(object):
     report_slave = None
     _expected_magic = b'\xfebin'
 
-    def __init__(self, file_path, ctl_connection_settings=None, resume_stream=False,
-                 blocking=False, only_events=None, log_file=None, log_pos=None,
-                 filter_non_implemented_events=True, stop_pos=None,
-                 ignored_events=None, auto_position=None,
-                 only_tables=None, ignored_tables=None,
-                 only_schemas=None, ignored_schemas=None,
-                 freeze_schema=False, skip_to_timestamp=None,
-                 report_slave=None, slave_uuid=None,
-                 pymysql_wrapper=None,
-                 fail_on_table_metadata_unavailable=False,
-                 slave_heartbeat=None):
+    def __init__(self, file_path, ctl_connection_settings=None, resume_stream=False, blocking=False, only_events=None,
+                 log_file=None, log_pos=None, filter_non_implemented_events=True, stop_pos=None, ignored_events=None,
+                 auto_position=None, only_tables=None, ignored_tables=None, only_schemas=None, ignored_schemas=None,
+                 freeze_schema=False, skip_to_timestamp=None, slave_uuid=None, pymysql_wrapper=None,
+                 fail_on_table_metadata_unavailable=False, slave_heartbeat=None, ignore_virtual_columns=False):
 
         # open file
         self._file = None
@@ -102,6 +96,7 @@ class BinLogFileReader(object):
         self.report_slave = None
         self.slave_uuid = slave_uuid
         self.slave_heartbeat = slave_heartbeat
+        self.ignore_virtual_columns = ignore_virtual_columns
 
         if pymysql_wrapper:
             self.pymysql_wrapper = pymysql_wrapper
@@ -300,16 +295,33 @@ class BinLogFileReader(object):
                     self.__connect_to_ctl()
 
                 cur = self._ctl_connection.cursor()
-                cur.execute("""
-                    SELECT
-                        COLUMN_NAME, COLLATION_NAME, CHARACTER_SET_NAME,
-                        COLUMN_COMMENT, COLUMN_TYPE, COLUMN_KEY, ORDINAL_POSITION
-                    FROM
-                        information_schema.columns
-                    WHERE
-                        table_schema = %s AND table_name = %s
-                    """, (schema, table))
+                if self.ignore_virtual_columns:
+                    sql = """
+                        SELECT
+                            COLUMN_NAME, COLLATION_NAME, CHARACTER_SET_NAME,
+                            COLUMN_COMMENT, COLUMN_TYPE, COLUMN_KEY, ORDINAL_POSITION
+                        FROM
+                            information_schema.columns
+                        WHERE
+                            EXTRA != 'VIRTUAL GENERATED'
+                            AND table_schema = '%s' 
+                            AND table_name = '%s'
+                        ORDER BY ORDINAL_POSITION
+                    """ % (schema, table)
+                else:
+                    sql = """
+                        SELECT
+                            COLUMN_NAME, COLLATION_NAME, CHARACTER_SET_NAME,
+                            COLUMN_COMMENT, COLUMN_TYPE, COLUMN_KEY, ORDINAL_POSITION
+                        FROM
+                            information_schema.columns
+                        WHERE
+                            table_schema = '%s' 
+                            AND table_name = '%s'
+                        ORDER BY ORDINAL_POSITION
+                    """ % (schema, table)
 
+                cur.execute(sql)
                 return cur.fetchall()
             except pymysql.OperationalError as error:
                 code, message = error.args
@@ -380,11 +392,13 @@ def parse_args():
                                "to set it properly).",
                           default='')
 
-    event = parser.add_argument_group('type filter')
-    event.add_argument('--only-dml', dest='only_dml', action='store_true', default=False,
-                       help='only print dml, ignore ddl')
-    event.add_argument('--sql-type', dest='sql_type', type=str, nargs='*', default=['INSERT', 'UPDATE', 'DELETE'],
-                       help='Sql type you want to process, support INSERT, UPDATE, DELETE.')
+    type_filter = parser.add_argument_group('type filter')
+    type_filter.add_argument('--only-dml', dest='only_dml', action='store_true', default=False,
+                             help='only print dml, ignore ddl')
+    type_filter.add_argument('--sql-type', dest='sql_type', type=str, nargs='*', default=['INSERT', 'UPDATE', 'DELETE'],
+                             help='Sql type you want to process, support INSERT, UPDATE, DELETE.')
+
+    event = parser.add_argument_group('event filter')
     event.add_argument('--stop-never', dest='stop_never', action='store_true', default=False,
                        help='Wait for more data from the server. default: stop replicate at the last binlog '
                             'when you start binlog2sql')
@@ -398,6 +412,8 @@ def parse_args():
                        help='Use REPLACE INTO instead of INSERT INTO.', default=False)
     event.add_argument('--insert-ignore', dest='insert_ignore', action='store_true',
                        help='Insert rows with INSERT IGNORE.', default=False)
+    event.add_argument('--ignore-virtual-columns', dest='ignore_virtual_columns', action='store_true',
+                       help='IGNORE VIRTUAL COLUMNS', default=False)
 
     result = parser.add_argument_group('result filter')
     result.add_argument('--result-file', dest='result_file', type=str,
