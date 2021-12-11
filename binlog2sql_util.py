@@ -134,12 +134,6 @@ def parse_args():
     interval.add_argument('--stop-datetime', dest='stop_time', type=str,
                           help="Stop Time. format %%Y-%%m-%%d %%H:%%M:%%S;", default='')
 
-    parser.add_argument('--need-comment', dest='need_comment', type=int, default=1,
-                        help='Choice need comment like [#start 268435860 end 268436724 time 2021-12-01 16:40:16] '
-                             'or not, 0 means not need, 1 means need')
-    parser.add_argument('--rename-db', dest='rename_db', type=str,
-                        help='Rename source dbs to one db.')
-
     schema = parser.add_argument_group('schema filter')
     schema.add_argument('-d', '--databases', dest='databases', type=str, nargs='*',
                         help='dbs you want to process', default='')
@@ -173,6 +167,13 @@ def parse_args():
                        help='Use REPLACE INTO instead of INSERT INTO.', default=False)
     event.add_argument('--insert-ignore', dest='insert_ignore', action='store_true',
                        help='Insert rows with INSERT IGNORE.', default=False)
+
+    result = parser.add_argument_group('result filter')
+    result.add_argument('--need-comment', dest='need_comment', type=int, default=1,
+                        help='Choice need comment like [#start 268435860 end 268436724 time 2021-12-01 16:40:16] '
+                             'or not, 0 means not need, 1 means need')
+    result.add_argument('--rename-db', dest='rename_db', type=str,
+                        help='Rename source dbs to one db.')
     return parser
 
 

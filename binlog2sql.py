@@ -147,17 +147,29 @@ class Binlog2sql(object):
         pass
 
 
-if __name__ == '__main__':
-    args = command_line_args(sys.argv[1:])
-    conn_setting = {'host': args.host, 'port': args.port, 'user': args.user, 'passwd': args.password,
-                    'charset': 'utf8mb4'}
-    set_log_format()
-    binlog2sql = Binlog2sql(connection_settings=conn_setting, start_file=args.start_file, start_pos=args.start_pos,
-                            end_file=args.end_file, end_pos=args.end_pos, start_time=args.start_time,
-                            stop_time=args.stop_time, only_schemas=args.databases, only_tables=args.tables,
-                            no_pk=args.no_pk, flashback=args.flashback, stop_never=args.stop_never,
-                            back_interval=args.back_interval, only_dml=args.only_dml, sql_type=args.sql_type,
-                            need_comment=args.need_comment, rename_db=args.rename_db, only_pk=args.only_pk,
-                            ignore_databases=args.ignore_databases, ignore_tables=args.ignore_databases,
-                            ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore)
+def main(args):
+    conn_setting = {
+        'host': args.host,
+        'port': args.port,
+        'user': args.user,
+        'passwd': args.password,
+        'charset': 'utf8mb4'
+    }
+
+    binlog2sql = Binlog2sql(
+        connection_settings=conn_setting, start_file=args.start_file, start_pos=args.start_pos,
+        end_file=args.end_file, end_pos=args.end_pos, start_time=args.start_time,
+        stop_time=args.stop_time, only_schemas=args.databases, only_tables=args.tables,
+        no_pk=args.no_pk, flashback=args.flashback, stop_never=args.stop_never,
+        back_interval=args.back_interval, only_dml=args.only_dml, sql_type=args.sql_type,
+        need_comment=args.need_comment, rename_db=args.rename_db, only_pk=args.only_pk,
+        ignore_databases=args.ignore_databases, ignore_tables=args.ignore_tables,
+        ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore
+    )
     binlog2sql.process_binlog()
+
+
+if __name__ == '__main__':
+    command_line_args = command_line_args(sys.argv[1:])
+    set_log_format()
+    main(command_line_args)
