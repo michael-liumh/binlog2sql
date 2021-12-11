@@ -363,14 +363,16 @@ def parse_args():
     schema = parser.add_argument_group('schema filter')
     schema.add_argument('-d', '--databases', dest='databases', type=str, nargs='*',
                         help='dbs you want to process', default='')
-    schema.add_argument('-id', '--ignore-databases', dest='ignore_databases', type=str, nargs='*',
-                        help='dbs you want to process', default='')
     schema.add_argument('-t', '--tables', dest='tables', type=str, nargs='*',
                         help='tables you want to process', default='')
+    schema.add_argument('-id', '--ignore-databases', dest='ignore_databases', type=str, nargs='*',
+                        help='dbs you want to process', default='')
     schema.add_argument('-it', '--ignore-tables', dest='ignore_tables', type=str, nargs='*',
                         help='tables you want to ignore', default='')
     schema.add_argument('-ic', '--ignore-columns', dest='ignore_columns', type=str, nargs='*',
-                        help='tables you want to ignore', default='')
+                        help='columns you want to ignore', default='')
+    schema.add_argument('--ignore-virtual-columns', dest='ignore_virtual_columns', action='store_true',
+                        help='Ignore virtual columns', default=False)
 
     interval = parser.add_argument_group('interval filter')
     interval.add_argument('--start-position', '--start-pos', dest='start_pos', type=int,
@@ -412,8 +414,6 @@ def parse_args():
                        help='Use REPLACE INTO instead of INSERT INTO.', default=False)
     event.add_argument('--insert-ignore', dest='insert_ignore', action='store_true',
                        help='Insert rows with INSERT IGNORE.', default=False)
-    event.add_argument('--ignore-virtual-columns', dest='ignore_virtual_columns', action='store_true',
-                       help='IGNORE VIRTUAL COLUMNS', default=False)
 
     result = parser.add_argument_group('result filter')
     result.add_argument('--result-file', dest='result_file', type=str,
