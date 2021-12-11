@@ -152,12 +152,12 @@ def parse_args():
                        help='only print dml, ignore ddl')
     event.add_argument('--sql-type', dest='sql_type', type=str, nargs='*', default=['INSERT', 'UPDATE', 'DELETE'],
                        help='Sql type you want to process, support INSERT, UPDATE, DELETE.')
-    parser.add_argument('--stop-never', dest='stop_never', action='store_true', default=False,
-                        help="Continuously parse binlog. default: stop at the latest event when you start.")
+    event.add_argument('--stop-never', dest='stop_never', action='store_true', default=False,
+                       help="Continuously parse binlog. default: stop at the latest event when you start.")
 
     # exclusive = parser.add_mutually_exclusive_group()
-    parser.add_argument('-K', '--no-primary-key', dest='no_pk', action='store_true',
-                        help='Generate insert sql without primary key if exists', default=False)
+    event.add_argument('-K', '--no-primary-key', dest='no_pk', action='store_true',
+                       help='Generate insert sql without primary key if exists', default=False)
     event.add_argument('-KK', '--only-primary-key', dest='only_pk', action='store_true', default=False,
                        help='Only key primary key condition when sql type is UPDATE and DELETE')
     event.add_argument('-B', '--flashback', dest='flashback', action='store_true',
