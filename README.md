@@ -14,8 +14,6 @@ git与pip的安装问题请自行搜索解决。
 修改
 ==============
 * 添加日志模块
-  * logger
-  * 使用前需要执行 set_log_format() 函数设置格式
 * 修改requirement.txt文件
   * 修改 mysql-replication 版本为 0.23
 * 添加对 json 数据类型的支持
@@ -39,6 +37,13 @@ git与pip的安装问题请自行搜索解决。
   * --file-regex 正则匹配 binlog file
   * --start-file 选择目录中起始的 binlog file
   * --stop-file 选择目录中终止的 binlog file
+* 添加忽略特定库、表、列的支持，方便解析后直接在另一个实例上执行
+* 添加将 insert into 语句替换成 replace into 和 insert ignore into 语句的支持，方便解析后直接在另一个实例上执行
+* 添加 update、delete 语句根据主键进行更新的支持，方便解析后直接在另一个实例上执行
+* 添加将 binlogfile2sql 解析结果保存到特定文件、目录的支持，方便另一个应用直接读取这个目录下 SQL 文件来执行
+* 添加 binlogfile2sql 只解析修改时间在指定分钟数前的支持，防止解析到未写入完成的 binlog，方便解析后直接在另一个实例上执行
+* 添加对结果 SQL 中的库名进行重命名的支持，方便解析后直接在另一个实例上执行
+* 添加去除注释的支持，方便解析后直接在另一个实例上执行
 
 测试
 ==============
