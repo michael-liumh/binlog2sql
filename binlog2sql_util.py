@@ -144,7 +144,7 @@ def parse_args():
     schema.add_argument('-it', '--ignore-tables', dest='ignore_tables', type=str, nargs='*',
                         help='tables you want to ignore', default='')
     schema.add_argument('-ic', '--ignore-columns', dest='ignore_columns', type=str, nargs='*',
-                        help='tables you want to ignore', default='')
+                        help='columns you want to ignore', default='')
 
     event = parser.add_argument_group('type filter')
     event.add_argument('--only-dml', dest='only_dml', action='store_true', default=False,
