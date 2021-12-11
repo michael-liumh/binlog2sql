@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import re
 import sys
 import argparse
 import datetime
@@ -148,6 +149,8 @@ def parse_args():
                         help='tables you want to process', default='')
     schema.add_argument('-it', '--ignore-tables', dest='ignore_tables', type=str, nargs='*',
                         help='tables you want to ignore', default='')
+    schema.add_argument('--ignore-virtual-columns', dest='ignore_virtual_columns', action='store_true', default=False,
+                        help='Ignore VIRTUAL GENERATED Columns')
 
     event = parser.add_argument_group('type filter')
     event.add_argument('--only-dml', dest='only_dml', action='store_true', default=False,
@@ -220,7 +223,7 @@ def fix_object_array(value: list):
             v = fix_object_array(v)
         elif isinstance(v, dict):
             v = fix_object_json(v)
-        
+
         # string直接原封不动存储
         new_list.append(v)
     return new_list
@@ -232,7 +235,7 @@ def fix_object_json(value: dict):
         # json内部 key 可能是字符串或bytes，如果是bytes，则跳转到bytes解析
         if isinstance(k, bytes):
             k = fix_object_bytes(k)
-        
+
         # json内部的 value 则多种多样，可能为字符串、bytes(划重点)、array、json
         if isinstance(v, bytes):
             v = fix_object_bytes(v)
@@ -240,7 +243,7 @@ def fix_object_json(value: dict):
             v = fix_object_array(v)
         elif isinstance(v, dict):
             v = fix_object_json(v)
-        
+
         # 字符串直接赋值即可
         new_dict[k] = v
     return new_dict
@@ -320,7 +323,7 @@ def fix_hex_values(sql: str):
 
 
 def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=None, flashback=False, no_pk=False,
-                                 rename_db=None, only_pk=False, only_result_sql=True):
+                                 rename_db=None, only_pk=False, only_return_sql=True, ignore_columns=None):
     if flashback and no_pk:
         raise ValueError('only one of flashback or no_pk can be True')
     if not (isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, UpdateRowsEvent)
@@ -334,8 +337,9 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
             or isinstance(binlog_event, DeleteRowsEvent):
         # 会调用 fix_object 函数生成sql
         pattern, db, table = generate_sql_pattern(binlog_event, row=row, flashback=flashback, no_pk=no_pk,
-                                                  rename_db=rename_db, only_pk=only_pk)
-        
+                                                  rename_db=rename_db, only_pk=only_pk,
+                                                  ignore_columns=ignore_columns)
+
         # cursor.mogrify 处理 value 时，会返回一个字符串，如果 value 里包含 dict，则会报错
         if isinstance(pattern['values'], list):
             pattern_values = handle_list(pattern['values'])
@@ -355,13 +359,27 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
                 sql = 'USE {0};\n'.format(binlog_event.schema)
         sql += '{0};'.format(fix_object(binlog_event.query))
 
-    if not only_result_sql:
+    if not only_return_sql:
         return sql, db, table
     else:
         return sql
 
 
-def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, rename_db=None, only_pk=False):
+def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, rename_db=None, only_pk=False,
+                         ignore_columns=None):
+    if ignore_columns and is_dml_event(binlog_event):
+        if isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, DeleteRowsEvent):
+            for k in row['values'].copy():
+                if k in ignore_columns:
+                    row['values'].pop(k)
+        else:
+            for k in row['before_values'].copy():
+                if k in ignore_columns:
+                    row['before_values'].pop(k)
+            for k in row['after_values'].copy():
+                if k in ignore_columns:
+                    row['after_values'].pop(k)
+
     template = ''
     values = []
     db = binlog_event.schema

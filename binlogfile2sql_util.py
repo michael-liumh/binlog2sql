@@ -357,6 +357,8 @@ def parse_args():
                         help='tables you want to process', default='')
     schema.add_argument('-it', '--ignore-tables', dest='ignore_tables', type=str, nargs='*',
                         help='tables you want to ignore', default='')
+    schema.add_argument('-ic', '--ignore-columns', dest='ignore_columns', type=str, nargs='*',
+                        help='tables you want to ignore', default='')
 
     interval = parser.add_argument_group('interval filter')
     interval.add_argument('--start-position', '--start-pos', dest='start_pos', type=int,
