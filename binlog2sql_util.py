@@ -108,7 +108,8 @@ def temp_open(filename, mode):
 def parse_args():
     """parse args for binlog2sql"""
 
-    parser = argparse.ArgumentParser(description='Parse MySQL binlog to SQL you want', add_help=False)
+    parser = argparse.ArgumentParser(description='Parse MySQL binlog to SQL you want', add_help=False,
+                                     formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('--help', dest='help', action='store_true', help='help information', default=False)
 
     connect_setting = parser.add_argument_group('connect setting')
