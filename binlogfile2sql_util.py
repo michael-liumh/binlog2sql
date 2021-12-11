@@ -394,6 +394,10 @@ def parse_args():
                        help='Only key primary key condition when sql type is UPDATE and DELETE')
     event.add_argument('-B', '--flashback', dest='flashback', action='store_true',
                        help='Flashback data to start_position of start_file', default=False)
+    event.add_argument('--replace', dest='replace', action='store_true',
+                       help='Use REPLACE INTO instead of INSERT INTO.', default=False)
+    event.add_argument('--insert-ignore', dest='insert_ignore', action='store_true',
+                       help='Insert rows with INSERT IGNORE.', default=False)
 
     result = parser.add_argument_group('result filter')
     result.add_argument('--result-file', dest='result_file', type=str,

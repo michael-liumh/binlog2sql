@@ -109,6 +109,8 @@ def parse_args():
     """parse args for binlog2sql"""
 
     parser = argparse.ArgumentParser(description='Parse MySQL binlog to SQL you want', add_help=False)
+    parser.add_argument('--help', dest='help', action='store_true', help='help information', default=False)
+
     connect_setting = parser.add_argument_group('connect setting')
     connect_setting.add_argument('-h', '--host', dest='host', type=str,
                                  help='Host the MySQL database server located', default='127.0.0.1')
@@ -118,6 +120,7 @@ def parse_args():
                                  help='MySQL Password to use', default='')
     connect_setting.add_argument('-P', '--port', dest='port', type=int,
                                  help='MySQL port to use', default=3306)
+
     interval = parser.add_argument_group('interval filter')
     interval.add_argument('--start-file', dest='start_file', type=str, help='Start binlog file to be parsed')
     interval.add_argument('--start-position', '--start-pos', dest='start_pos', type=int,
@@ -130,9 +133,6 @@ def parse_args():
                           help="Start time. format %%Y-%%m-%%d %%H:%%M:%%S", default='')
     interval.add_argument('--stop-datetime', dest='stop_time', type=str,
                           help="Stop Time. format %%Y-%%m-%%d %%H:%%M:%%S;", default='')
-    parser.add_argument('--stop-never', dest='stop_never', action='store_true', default=False,
-                        help="Continuously parse binlog. default: stop at the latest event when you start.")
-    parser.add_argument('--help', dest='help', action='store_true', help='help information', default=False)
 
     parser.add_argument('--need-comment', dest='need_comment', type=int, default=1,
                         help='Choice need comment like [#start 268435860 end 268436724 time 2021-12-01 16:40:16] '
@@ -149,24 +149,30 @@ def parse_args():
                         help='tables you want to process', default='')
     schema.add_argument('-it', '--ignore-tables', dest='ignore_tables', type=str, nargs='*',
                         help='tables you want to ignore', default='')
-    schema.add_argument('--ignore-virtual-columns', dest='ignore_virtual_columns', action='store_true', default=False,
-                        help='Ignore VIRTUAL GENERATED Columns')
+    schema.add_argument('-ic', '--ignore-columns', dest='ignore_columns', type=str, nargs='*',
+                        help='tables you want to ignore', default='')
 
     event = parser.add_argument_group('type filter')
     event.add_argument('--only-dml', dest='only_dml', action='store_true', default=False,
                        help='only print dml, ignore ddl')
     event.add_argument('--sql-type', dest='sql_type', type=str, nargs='*', default=['INSERT', 'UPDATE', 'DELETE'],
                        help='Sql type you want to process, support INSERT, UPDATE, DELETE.')
+    parser.add_argument('--stop-never', dest='stop_never', action='store_true', default=False,
+                        help="Continuously parse binlog. default: stop at the latest event when you start.")
 
     # exclusive = parser.add_mutually_exclusive_group()
     parser.add_argument('-K', '--no-primary-key', dest='no_pk', action='store_true',
                         help='Generate insert sql without primary key if exists', default=False)
     event.add_argument('-KK', '--only-primary-key', dest='only_pk', action='store_true', default=False,
                        help='Only key primary key condition when sql type is UPDATE and DELETE')
-    parser.add_argument('-B', '--flashback', dest='flashback', action='store_true',
-                        help='Flashback data to start_position of start_file', default=False)
-    parser.add_argument('--back-interval', dest='back_interval', type=float, default=1.0,
-                        help="Sleep time between chunks of 1000 rollback sql. set it to 0 if do not need sleep")
+    event.add_argument('-B', '--flashback', dest='flashback', action='store_true',
+                       help='Flashback data to start_position of start_file', default=False)
+    event.add_argument('--back-interval', dest='back_interval', type=float, default=1.0,
+                       help="Sleep time between chunks of 1000 rollback sql. set it to 0 if do not need sleep")
+    event.add_argument('--replace', dest='replace', action='store_true',
+                       help='Use REPLACE INTO instead of INSERT INTO.', default=False)
+    event.add_argument('--insert-ignore', dest='insert_ignore', action='store_true',
+                       help='Insert rows with INSERT IGNORE.', default=False)
     return parser
 
 
@@ -323,7 +329,8 @@ def fix_hex_values(sql: str):
 
 
 def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=None, flashback=False, no_pk=False,
-                                 rename_db=None, only_pk=False, only_return_sql=True, ignore_columns=None):
+                                 rename_db=None, only_pk=False, only_return_sql=True, ignore_columns=None,
+                                 replace=False, insert_ignore=False):
     if flashback and no_pk:
         raise ValueError('only one of flashback or no_pk can be True')
     if not (isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, UpdateRowsEvent)
@@ -336,9 +343,10 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
     if isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, UpdateRowsEvent) \
             or isinstance(binlog_event, DeleteRowsEvent):
         # 会调用 fix_object 函数生成sql
-        pattern, db, table = generate_sql_pattern(binlog_event, row=row, flashback=flashback, no_pk=no_pk,
-                                                  rename_db=rename_db, only_pk=only_pk,
-                                                  ignore_columns=ignore_columns)
+        pattern, db, table = generate_sql_pattern(
+            binlog_event, row=row, flashback=flashback, no_pk=no_pk, rename_db=rename_db, only_pk=only_pk,
+            ignore_columns=ignore_columns, replace=replace, insert_ignore=insert_ignore
+        )
 
         # cursor.mogrify 处理 value 时，会返回一个字符串，如果 value 里包含 dict，则会报错
         if isinstance(pattern['values'], list):
@@ -366,7 +374,7 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
 
 
 def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, rename_db=None, only_pk=False,
-                         ignore_columns=None):
+                         ignore_columns=None, replace=False, insert_ignore=False):
     if ignore_columns and is_dml_event(binlog_event):
         if isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, DeleteRowsEvent):
             for k in row['values'].copy():
@@ -404,11 +412,24 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                 values = map(fix_object, pk_item.values())
         elif isinstance(binlog_event, DeleteRowsEvent):
             db = rename_db if rename_db else binlog_event.schema
-            template = 'INSERT INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
-                db, binlog_event.table,
-                ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
-                ', '.join(['%s'] * len(row['values']))
-            )
+            if replace:
+                template = 'REPLACE INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
+                    db, binlog_event.table,
+                    ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
+                    ', '.join(['%s'] * len(row['values']))
+                )
+            elif insert_ignore:
+                template = 'INSERT IGNORE INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
+                    db, binlog_event.table,
+                    ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
+                    ', '.join(['%s'] * len(row['values']))
+                )
+            else:
+                template = 'INSERT INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
+                    db, binlog_event.table,
+                    ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
+                    ', '.join(['%s'] * len(row['values']))
+                )
             values = map(fix_object, row['values'].values())
         elif isinstance(binlog_event, UpdateRowsEvent):
             db = rename_db if rename_db else binlog_event.schema
@@ -417,7 +438,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                     db, binlog_event.table,
                     ', '.join(['`%s`=%%s' % x for x in row['before_values'].keys()]),
                     ' AND '.join(map(compare_items, row['after_values'].items())))
-                values = map(fix_object, list(row['before_values'].values())+list(row['after_values'].values()))
+                values = map(fix_object, list(row['before_values'].values()) + list(row['after_values'].values()))
             else:
                 pk_item = {
                     binlog_event.primary_key: row['after_values'].get(binlog_event.primary_key)
@@ -438,11 +459,25 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                     row['values'].pop(binlog_event.primary_key)
 
             db = rename_db if rename_db else binlog_event.schema
-            template = 'INSERT INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
-                db, binlog_event.table,
-                ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
-                ', '.join(['%s'] * len(row['values']))
-            )
+            if replace:
+                template = 'REPLACE INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
+                    db, binlog_event.table,
+                    ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
+                    ', '.join(['%s'] * len(row['values']))
+                )
+
+            elif insert_ignore:
+                template = 'INSERT IGNORE INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
+                    db, binlog_event.table,
+                    ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
+                    ', '.join(['%s'] * len(row['values']))
+                )
+            else:
+                template = 'INSERT INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
+                    db, binlog_event.table,
+                    ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
+                    ', '.join(['%s'] * len(row['values']))
+                )
             values = map(fix_object, row['values'].values())
         elif isinstance(binlog_event, DeleteRowsEvent):
             db = rename_db if rename_db else binlog_event.schema
@@ -465,7 +500,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                     ', '.join(['`%s`=%%s' % k for k in row['after_values'].keys()]),
                     ' AND '.join(map(compare_items, row['before_values'].items()))
                 )
-                values = map(fix_object, list(row['after_values'].values())+list(row['before_values'].values()))
+                values = map(fix_object, list(row['after_values'].values()) + list(row['before_values'].values()))
             else:
                 pk_item = {
                     binlog_event.primary_key: row['before_values'].get(binlog_event.primary_key)

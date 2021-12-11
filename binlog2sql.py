@@ -15,7 +15,8 @@ class Binlog2sql(object):
     def __init__(self, connection_settings, start_file=None, start_pos=None, end_file=None, end_pos=None,
                  start_time=None, stop_time=None, only_schemas=None, only_tables=None, no_pk=False,
                  flashback=False, stop_never=False, back_interval=1.0, only_dml=True, sql_type=None,
-                 need_comment=1, rename_db=None, only_pk=False, ignore_databases=None, ignore_tables=None):
+                 need_comment=1, rename_db=None, only_pk=False, ignore_databases=None, ignore_tables=None,
+                 ignore_columns=None, replace=False, insert_ignore=False):
         """
         conn_setting: {'host': 127.0.0.1, 'port': 3306, 'user': user, 'passwd': passwd, 'charset': 'utf8'}
         """
@@ -25,7 +26,7 @@ class Binlog2sql(object):
 
         self.conn_setting = connection_settings
         self.start_file = start_file
-        self.start_pos = start_pos if start_pos else 4    # use binlog v4
+        self.start_pos = start_pos if start_pos else 4  # use binlog v4
         self.end_file = end_file if end_file else start_file
         self.end_pos = end_pos
         if start_time:
@@ -50,6 +51,10 @@ class Binlog2sql(object):
         self.only_pk = only_pk
         self.ignore_databases = ignore_databases
         self.ignore_tables = ignore_tables
+        self.ignore_columns = ignore_columns
+        self.replace = replace
+        self.insert_ignore = insert_ignore
+
         with self.connection as cursor:
             cursor.execute("SHOW MASTER STATUS")
             self.eof_file, self.eof_pos = cursor.fetchone()[:2]
@@ -102,18 +107,23 @@ class Binlog2sql(object):
                     e_start_pos = last_pos
 
                 if isinstance(binlog_event, QueryEvent) and not self.only_dml:
-                    sql = concat_sql_from_binlog_event(cursor=cursor, binlog_event=binlog_event,
-                                                       flashback=self.flashback, no_pk=self.no_pk,
-                                                       rename_db=self.rename_db, only_pk=self.only_pk)
+                    sql = concat_sql_from_binlog_event(
+                        cursor=cursor, binlog_event=binlog_event,
+                        flashback=self.flashback, no_pk=self.no_pk, rename_db=self.rename_db, only_pk=self.only_pk,
+                        ignore_columns=self.ignore_columns, replace=self.replace, insert_ignore=self.insert_ignore
+                    )
                     if sql:
                         if self.need_comment != 1:
                             sql = re.sub('; #.*', ';', sql)
                         print(sql)
                 elif is_dml_event(binlog_event) and event_type(binlog_event) in self.sql_type:
                     for row in binlog_event.rows:
-                        sql = concat_sql_from_binlog_event(cursor=cursor, binlog_event=binlog_event, no_pk=self.no_pk,
-                                                           row=row, flashback=self.flashback, e_start_pos=e_start_pos,
-                                                           rename_db=self.rename_db, only_pk=self.only_pk)
+                        sql = concat_sql_from_binlog_event(
+                            cursor=cursor, binlog_event=binlog_event, no_pk=self.no_pk, row=row,
+                            flashback=self.flashback, e_start_pos=e_start_pos, rename_db=self.rename_db,
+                            only_pk=self.only_pk, ignore_columns=self.ignore_columns, replace=self.replace,
+                            insert_ignore=self.insert_ignore
+                        )
                         try:
                             if sql:
                                 if self.need_comment != 1:
@@ -148,5 +158,6 @@ if __name__ == '__main__':
                             no_pk=args.no_pk, flashback=args.flashback, stop_never=args.stop_never,
                             back_interval=args.back_interval, only_dml=args.only_dml, sql_type=args.sql_type,
                             need_comment=args.need_comment, rename_db=args.rename_db, only_pk=args.only_pk,
-                            ignore_databases=args.ignore_databases, ignore_tables=args.ignore_databases)
+                            ignore_databases=args.ignore_databases, ignore_tables=args.ignore_databases,
+                            ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore)
     binlog2sql.process_binlog()
