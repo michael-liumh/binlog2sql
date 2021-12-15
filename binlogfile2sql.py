@@ -21,7 +21,7 @@ class BinlogFile2sql(object):
                  flashback=False, stop_never=False, only_dml=True, sql_type=None, result_dir=None, need_comment=1,
                  rename_db=None, only_pk=False, result_file=None, table_per_file=False, insert_ignore=False,
                  ignore_databases=None, ignore_tables=None, ignore_columns=None, replace=False,
-                 ignore_virtual_columns=False, file_index=0):
+                 ignore_virtual_columns=False, file_index=0, remove_not_update_col=False):
         """
         connection_settings: {'host': 127.0.0.1, 'port': 3306, 'user': slave, 'passwd': slave}
         """
@@ -60,6 +60,7 @@ class BinlogFile2sql(object):
         self.insert_ignore = insert_ignore
         self.ignore_virtual_columns = ignore_virtual_columns
         self.file_index = file_index
+        self.remove_not_update_col = remove_not_update_col
 
     def process_binlog(self):
         stream = BinLogFileReader(self.file_path, ctl_connection_settings=self.connection_settings,
@@ -114,7 +115,8 @@ class BinlogFile2sql(object):
                         cursor=cur, binlog_event=binlog_event, flashback=self.flashback, no_pk=self.no_pk,
                         rename_db=self.rename_db, only_pk=self.only_pk, only_return_sql=False,
                         ignore_columns=self.ignore_columns, replace=self.replace, insert_ignore=self.insert_ignore,
-                        ignore_virtual_columns=self.ignore_virtual_columns
+                        ignore_virtual_columns=self.ignore_virtual_columns,
+                        remove_not_update_col=self.remove_not_update_col
                     )
                     if sql:
                         if self.need_comment != 1:
@@ -132,7 +134,8 @@ class BinlogFile2sql(object):
                             cursor=cur, binlog_event=binlog_event, row=row, flashback=self.flashback, no_pk=self.no_pk,
                             e_start_pos=e_start_pos, rename_db=self.rename_db, only_pk=self.only_pk,
                             only_return_sql=False, ignore_columns=self.ignore_columns, replace=self.replace,
-                            insert_ignore=self.insert_ignore, ignore_virtual_columns=self.ignore_virtual_columns
+                            insert_ignore=self.insert_ignore, ignore_virtual_columns=self.ignore_virtual_columns,
+                            remove_not_update_col=self.remove_not_update_col
                         )
                         if sql:
                             if self.need_comment != 1:
@@ -187,7 +190,8 @@ def main(args):
                 result_file=args.result_file, table_per_file=args.table_per_file, result_dir=args.result_dir,
                 ignore_databases=args.ignore_databases, ignore_tables=args.ignore_tables,
                 ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore,
-                ignore_virtual_columns=args.ignore_virtual_columns, file_index=i
+                ignore_virtual_columns=args.ignore_virtual_columns, file_index=i,
+                remove_not_update_col=args.remove_not_update_col
             )
             bin2sql.process_binlog()
     else:
@@ -204,7 +208,8 @@ def main(args):
                     only_pk=args.only_pk, result_file=args.result_file, table_per_file=args.table_per_file,
                     ignore_databases=args.ignore_databases, ignore_tables=args.ignore_tables,
                     ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore,
-                    ignore_virtual_columns=args.ignore_virtual_columns
+                    ignore_virtual_columns=args.ignore_virtual_columns,
+                    remove_not_update_col=args.remove_not_update_col
                 )
                 r = bin2sql.process_binlog()
                 if r is True:

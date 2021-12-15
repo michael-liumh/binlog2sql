@@ -16,7 +16,7 @@ class Binlog2sql(object):
                  start_time=None, stop_time=None, only_schemas=None, only_tables=None, no_pk=False,
                  flashback=False, stop_never=False, back_interval=1.0, only_dml=True, sql_type=None,
                  need_comment=1, rename_db=None, only_pk=False, ignore_databases=None, ignore_tables=None,
-                 ignore_columns=None, replace=False, insert_ignore=False):
+                 ignore_columns=None, replace=False, insert_ignore=False, remove_not_update_col=False):
         """
         conn_setting: {'host': 127.0.0.1, 'port': 3306, 'user': user, 'passwd': passwd, 'charset': 'utf8'}
         """
@@ -54,6 +54,7 @@ class Binlog2sql(object):
         self.ignore_columns = ignore_columns
         self.replace = replace
         self.insert_ignore = insert_ignore
+        self.remove_not_update_col = remove_not_update_col
 
         with self.connection as cursor:
             cursor.execute("SHOW MASTER STATUS")
@@ -110,7 +111,8 @@ class Binlog2sql(object):
                     sql = concat_sql_from_binlog_event(
                         cursor=cursor, binlog_event=binlog_event,
                         flashback=self.flashback, no_pk=self.no_pk, rename_db=self.rename_db, only_pk=self.only_pk,
-                        ignore_columns=self.ignore_columns, replace=self.replace, insert_ignore=self.insert_ignore
+                        ignore_columns=self.ignore_columns, replace=self.replace, insert_ignore=self.insert_ignore,
+                        remove_not_update_col=self.remove_not_update_col
                     )
                     if sql:
                         if self.need_comment != 1:
@@ -122,7 +124,7 @@ class Binlog2sql(object):
                             cursor=cursor, binlog_event=binlog_event, no_pk=self.no_pk, row=row,
                             flashback=self.flashback, e_start_pos=e_start_pos, rename_db=self.rename_db,
                             only_pk=self.only_pk, ignore_columns=self.ignore_columns, replace=self.replace,
-                            insert_ignore=self.insert_ignore
+                            insert_ignore=self.insert_ignore, remove_not_update_col=self.remove_not_update_col
                         )
                         try:
                             if sql:
@@ -164,7 +166,8 @@ def main(args):
         back_interval=args.back_interval, only_dml=args.only_dml, sql_type=args.sql_type,
         need_comment=args.need_comment, rename_db=args.rename_db, only_pk=args.only_pk,
         ignore_databases=args.ignore_databases, ignore_tables=args.ignore_tables,
-        ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore
+        ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore,
+        remove_not_update_col=args.remove_not_update_col
     )
     binlog2sql.process_binlog()
 

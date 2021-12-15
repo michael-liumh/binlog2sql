@@ -419,8 +419,8 @@ def parse_args():
     result = parser.add_argument_group('result filter')
     result.add_argument('--result-file', dest='result_file', type=str,
                         help='If set, we will save result sql in this file instead print into stdout')
-    result.add_argument('--table-per-file', dest='table_per_file', action='store_true',
-                        help='If set, we will save result sql in table per file instead of result file', default=False)
+    result.add_argument('--table-per-file', dest='table_per_file', action='store_true', default=False,
+                        help='If set, we will save result sql in table per file instead of result file')
     result.add_argument('--record-file', dest='record_file', type=str, default='executed_records.txt',
                         help='When you use --stop-never, we will save executed record in this file')
     result.add_argument('--result-dir', dest='result_dir', type=str, default='parsed_binlog_results/',
@@ -432,6 +432,8 @@ def parse_args():
                              'or not, 0 means not need, 1 means need')
     result.add_argument('--rename-db', dest='rename_db', type=str,
                         help='Rename source dbs to one db.')
+    result.add_argument('--remove-not-update-col', dest='remove_not_update_col', action='store_true', default=False,
+                        help='If set, we will remove not update column in update statements (exclude primary key)')
 
     binlog_file_filter = parser.add_argument_group('binlog file filter')
     binlog_file_filter.add_argument('-f', '--file-path', dest='file_path', type=str, nargs='*',
