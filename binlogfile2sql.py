@@ -21,7 +21,7 @@ class BinlogFile2sql(object):
                  flashback=False, stop_never=False, only_dml=True, sql_type=None, result_dir=None, need_comment=1,
                  rename_db=None, only_pk=False, result_file=None, table_per_file=False, insert_ignore=False,
                  ignore_databases=None, ignore_tables=None, ignore_columns=None, replace=False,
-                 ignore_virtual_columns=False):
+                 ignore_virtual_columns=False, file_index=0):
         """
         connection_settings: {'host': 127.0.0.1, 'port': 3306, 'user': slave, 'passwd': slave}
         """
@@ -59,6 +59,7 @@ class BinlogFile2sql(object):
         self.replace = replace
         self.insert_ignore = insert_ignore
         self.ignore_virtual_columns = ignore_virtual_columns
+        self.file_index = file_index
 
     def process_binlog(self):
         stream = BinLogFileReader(self.file_path, ctl_connection_settings=self.connection_settings,
@@ -75,10 +76,12 @@ class BinlogFile2sql(object):
         elif self.result_file and not self.table_per_file:
             result_sql_file = self.result_file
 
+        mode = 'w' if self.file_index == 0 else 'a'
         if result_sql_file and not self.table_per_file:
-            save_result_sql(result_sql_file, '', 'w')
-            logger.info(f'Saving result into file: [{result_sql_file}]')
-            f_result_sql_file = open(result_sql_file, 'w')
+            if self.file_index == 0:
+                save_result_sql(result_sql_file, '', mode)
+                logger.info(f'Saving result into file: [{result_sql_file}]')
+            f_result_sql_file = open(result_sql_file, mode)
 
         if self.table_per_file:
             logger.info(f'Saving table per result into dir: [{self.result_dir}]')
@@ -173,7 +176,7 @@ def main(args):
         sys.exit(1)
 
     if not args.stop_never:
-        for binlog_file in binlog_file_list:
+        for i, binlog_file in enumerate(binlog_file_list):
             logger.info('parsing binlog file: %s [%s]' %
                         (binlog_file, timestamp_to_datetime(os.stat(binlog_file).st_mtime)))
             bin2sql = BinlogFile2sql(
@@ -184,7 +187,7 @@ def main(args):
                 result_file=args.result_file, table_per_file=args.table_per_file, result_dir=args.result_dir,
                 ignore_databases=args.ignore_databases, ignore_tables=args.ignore_tables,
                 ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore,
-                ignore_virtual_columns=args.ignore_virtual_columns
+                ignore_virtual_columns=args.ignore_virtual_columns, file_index=i
             )
             bin2sql.process_binlog()
     else:
