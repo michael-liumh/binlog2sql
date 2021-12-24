@@ -11,6 +11,7 @@ import json
 import logging
 import chardet
 from contextlib import contextmanager
+import colorlog
 from pymysqlreplication.event import QueryEvent
 from pymysqlreplication.row_event import (
     WriteRowsEvent,
@@ -24,41 +25,44 @@ else:
     PY3PLUS = False
 
 # create a logger
+base_dir = os.path.dirname(os.path.abspath(__file__))
+sep = '/' if '/' in sys.argv[0] else os.sep
+py_file_pre = sys.argv[0].split(sep)[-1].split('.')[0]
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+# set logger color
+log_colors_config = {
+    'DEBUG': 'bold_purple',
+    'INFO': 'bold_green',
+    'WARNING': 'bold_yellow',
+    'ERROR': 'bold_red',
+    'CRITICAL': 'red',
+}
+
+# set logger format
+console_format = colorlog.ColoredFormatter(
+    "%(log_color)s[%(asctime)s] [%(module)s:%(funcName)s] [%(lineno)d] [%(levelname)s] %(message)s",
+    log_colors=log_colors_config
+)
+
+# add console handler
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(console_format)
+logger.addHandler(console_handler)
 
 
 def set_log_format():
     import logging.handlers
-    import colorlog
 
     global logger
 
-    # set logger color
-    log_colors_config = {
-        'DEBUG': 'bold_purple',
-        'INFO': 'bold_green',
-        'WARNING': 'bold_yellow',
-        'ERROR': 'bold_red',
-        'CRITICAL': 'bold_red',
-    }
-
     # set logger format
-    console_format = colorlog.ColoredFormatter(
-        "%(log_color)s[%(asctime)s] [%(module)s:%(funcName)s] [%(lineno)d] [%(levelname)s] %(message)s",
-        log_colors=log_colors_config
-    )
     logfile_format = logging.Formatter(
         "[%(asctime)s] [%(module)s:%(funcName)s] [%(lineno)d] [%(levelname)s] %(message)s"
     )
 
-    # add console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(console_format)
-    logger.addHandler(console_handler)
-
     # add rotate file handler
-    base_dir = os.path.dirname(os.path.abspath(__file__))
     logs_dir = os.path.join(base_dir, 'logs')
     if not os.path.isdir(logs_dir):
         os.makedirs(logs_dir, exist_ok=True)
@@ -66,7 +70,6 @@ def set_log_format():
     sep = '/' if '/' in sys.argv[0] else os.sep
     logfile = logs_dir + sep + sys.argv[0].split(sep)[-1].split('.')[0] + '.log'
     file_maxsize = 1024 * 1024 * 100  # 100m
-    # logfile_size = os.path.getsize(logfile) if os.path.exists(logfile) else 0
 
     file_handler = logging.handlers.RotatingFileHandler(logfile, maxBytes=file_maxsize, backupCount=10)
     file_handler.setFormatter(logfile_format)
@@ -177,6 +180,14 @@ def parse_args():
                         help='Rename source dbs to one db.')
     result.add_argument('--remove-not-update-col', dest='remove_not_update_col', action='store_true', default=False,
                         help='If set, we will remove not update column in update statements (exclude primary key)')
+    result.add_argument('--result-file', dest='result_file', type=str,
+                        help='If set, we will save result sql in this file instead print into stdout.'
+                             '(Tip: we will ignore path if give a result file with relative path or absolute path,'
+                             'please use --result-dir to set path)')
+    result.add_argument('--result-dir', dest='result_dir', type=str, default='parsed_binlog_results',
+                        help='Give a dir to save result_file.')
+    result.add_argument('--table-per-file', dest='table_per_file', action='store_true', default=False,
+                        help='If set, we will save result sql in table per file instead of result file')
     return parser
 
 
@@ -184,9 +195,19 @@ def command_line_args(args):
     need_print_help = False if args else True
     parser = parse_args()
     args = parser.parse_args(args)
+
     if args.help or need_print_help:
         parser.print_help()
         sys.exit(1)
+
+    if args.result_file and args.table_per_file:
+        logger.error('Could not use --result-file and --table-per-file at the same time.')
+        sys.exit(1)
+
+    if args.result_file and sep in args.result_file:
+        logger.warning('we will ignore path if give a result file with relative path or absolute path, '
+                       'please use --result-dir to set path.')
+
     if not args.start_file:
         raise ValueError('Lack of parameter: start_file')
     if args.flashback and args.stop_never:
@@ -200,6 +221,11 @@ def command_line_args(args):
         args.password = getpass.getpass()
     else:
         args.password = args.password[0]
+
+    if args.result_file and not os.path.exists(args.result_dir):
+        os.makedirs(args.result_dir, exist_ok=True)
+    args.result_file = os.path.join(args.result_dir, args.result_file.split(sep)[-1]) if args.result_file else \
+        args.result_file
     return args
 
 

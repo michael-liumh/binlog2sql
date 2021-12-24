@@ -9,7 +9,7 @@ import getpass
 import sys
 from datetime import datetime as dt
 from pymysql.cursors import DictCursor
-from binlog2sql_util import is_valid_datetime, logger
+from binlog2sql_util import is_valid_datetime, logger, sep
 # from pymysql.constants.COMMAND import COM_BINLOG_DUMP, COM_REGISTER_SLAVE
 # from pymysql.util import int2byte
 #
@@ -418,13 +418,17 @@ def parse_args():
 
     result = parser.add_argument_group('result filter')
     result.add_argument('--result-file', dest='result_file', type=str,
-                        help='If set, we will save result sql in this file instead print into stdout')
+                        help='If set, we will save result sql in this file instead print into stdout.'
+                             '(Tip: we will ignore path if give a result file with relative path or absolute path,'
+                             'please use --result-dir to set path)')
+    result.add_argument('--record-file', dest='record_file', type=str, default='executed_records.txt',
+                        help='When you use --stop-never, we will save executed record in this file'
+                             '(Tip: we will ignore path if give a record file with relative path or absolute path,'
+                             'please use --result-dir to set path)')
+    result.add_argument('--result-dir', dest='result_dir', type=str, default='parsed_binlog_file_results',
+                        help='Give a dir to save record_file and result_file in result dir.')
     result.add_argument('--table-per-file', dest='table_per_file', action='store_true', default=False,
                         help='If set, we will save result sql in table per file instead of result file')
-    result.add_argument('--record-file', dest='record_file', type=str, default='executed_records.txt',
-                        help='When you use --stop-never, we will save executed record in this file')
-    result.add_argument('--result-dir', dest='result_dir', type=str, default='parsed_binlog_results/',
-                        help='Give a dir to save record_file and result_file in result dir')
     result.add_argument('-ma', '--minutes-ago', dest='minutes_ago', type=int, default=3,
                         help='When you use --stop-never, we only parse specify minutes ago of modify time of file.')
     result.add_argument('--need-comment', dest='need_comment', type=int, default=1,
@@ -458,9 +462,19 @@ def command_line_args(args):
     need_print_help = False if args else True
     parser = parse_args()
     args = parser.parse_args(args)
+
     if args.help or need_print_help:
         parser.print_help()
         sys.exit(1)
+
+    if args.result_file and args.table_per_file:
+        logger.error('Could not use --result-file and --table-per-file at the same time.')
+        sys.exit(1)
+
+    if args.result_file and sep in args.result_file:
+        logger.warning('we will ignore path if give a result file with relative path or absolute path, '
+                       'please use --result-dir to set path.')
+
     if args.flashback and args.stop_never:
         raise ValueError('Only one of flashback or stop-never can be True')
     if args.flashback and args.no_pk:
@@ -478,13 +492,15 @@ def command_line_args(args):
         logger.error('Args --minutes-ago must not lower than 1.')
         sys.exit(1)
 
-    if not os.path.exists(args.result_dir):
+    if (args.result_file or args.stop_never or args.table_per_file) and not os.path.exists(args.result_dir):
         os.makedirs(args.result_dir, exist_ok=True)
-    args.record_file = os.path.join(args.result_dir, args.record_file)
+    args.result_file = os.path.join(args.result_dir, args.result_file.split(sep)[-1]) \
+        if args.result_file and args.result_dir else args.result_file
 
-    result_dir = os.path.dirname(args.result_file) if args.result_file else './'
-    if result_dir and not os.path.exists(result_dir):
-        os.makedirs(result_dir, exist_ok=True)
+    # record file 放到不同的目录里，防止起多个解析进程时冲突
+    args.record_file = os.path.join(args.result_dir, args.record_file.split(sep)[-1]) \
+        if args.record_file and args.result_dir else args.record_file
+
     return args
 
 

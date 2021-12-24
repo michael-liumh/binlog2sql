@@ -85,7 +85,7 @@ class BinlogFile2sql(object):
             f_result_sql_file = open(result_sql_file, mode)
 
         if self.table_per_file:
-            logger.info(f'Saving table per result into dir: [{self.result_dir}]')
+            logger.info(f'Saving table per file into dir: [{self.result_dir}]')
 
         flag_last_event = False
         e_start_pos, last_pos = stream.log_pos, stream.log_pos
@@ -126,6 +126,9 @@ class BinlogFile2sql(object):
                         elif self.table_per_file and db and table:
                             result_sql_file = os.path.join(self.result_dir, db + '.' + table + '.sql')
                             save_result_sql(result_sql_file, sql + '\n')
+                        elif self.table_per_file:
+                            result_sql_file = os.path.join(self.result_dir, 'others.sql')
+                            save_result_sql(result_sql_file, sql + '\n')
                         else:
                             print(sql)
                 elif is_dml_event(binlog_event) and event_type(binlog_event) in self.sql_type:
@@ -145,6 +148,9 @@ class BinlogFile2sql(object):
                                 f_result_sql_file.write(sql + '\n')
                             elif self.table_per_file and db and table:
                                 result_sql_file = os.path.join(self.result_dir, db + '.' + table + '.sql')
+                                save_result_sql(result_sql_file, sql + '\n')
+                            elif self.table_per_file:
+                                result_sql_file = os.path.join(self.result_dir, 'others.sql')
                                 save_result_sql(result_sql_file, sql + '\n')
                             else:
                                 print(sql)

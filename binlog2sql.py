@@ -4,10 +4,14 @@ import re
 import sys
 import datetime
 import pymysql
+import os
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent
 from binlog2sql_util import command_line_args, concat_sql_from_binlog_event, is_dml_event, event_type, logger, \
     set_log_format
+from binlogfile2sql_util import save_result_sql
+
+sep = '/' if '/' in sys.argv[0] else os.sep
 
 
 class Binlog2sql(object):
@@ -16,7 +20,8 @@ class Binlog2sql(object):
                  start_time=None, stop_time=None, only_schemas=None, only_tables=None, no_pk=False,
                  flashback=False, stop_never=False, back_interval=1.0, only_dml=True, sql_type=None,
                  need_comment=1, rename_db=None, only_pk=False, ignore_databases=None, ignore_tables=None,
-                 ignore_columns=None, replace=False, insert_ignore=False, remove_not_update_col=False):
+                 ignore_columns=None, replace=False, insert_ignore=False, remove_not_update_col=False,
+                 table_per_file=False, result_file=None, result_dir=None):
         """
         conn_setting: {'host': 127.0.0.1, 'port': 3306, 'user': user, 'passwd': passwd, 'charset': 'utf8'}
         """
@@ -55,6 +60,9 @@ class Binlog2sql(object):
         self.replace = replace
         self.insert_ignore = insert_ignore
         self.remove_not_update_col = remove_not_update_col
+        self.result_file = result_file
+        self.result_dir = result_dir
+        self.table_per_file = table_per_file
 
         with self.connection as cursor:
             cursor.execute("SHOW MASTER STATUS")
@@ -78,6 +86,16 @@ class Binlog2sql(object):
                                     log_file=self.start_file, log_pos=self.start_pos, only_schemas=self.only_schemas,
                                     only_tables=self.only_tables, resume_stream=True, blocking=True,
                                     ignored_schemas=self.ignore_databases, ignored_tables=self.ignore_tables)
+
+        result_sql_file = ''
+        f_result_sql_file = ''
+        mode = 'w'
+        if self.result_file:
+            result_sql_file = self.result_file
+            logger.info(f'Saving result into file: [{result_sql_file}]')
+            f_result_sql_file = open(result_sql_file, mode)
+        elif self.table_per_file:
+            logger.info(f'Saving table per file into dir: [{self.result_dir}]')
 
         flag_last_event = False
         e_start_pos, last_pos = stream.log_pos, stream.log_pos
@@ -108,8 +126,8 @@ class Binlog2sql(object):
                     e_start_pos = last_pos
 
                 if isinstance(binlog_event, QueryEvent) and not self.only_dml:
-                    sql = concat_sql_from_binlog_event(
-                        cursor=cursor, binlog_event=binlog_event,
+                    sql, db, table = concat_sql_from_binlog_event(
+                        cursor=cursor, binlog_event=binlog_event, only_return_sql=False,
                         flashback=self.flashback, no_pk=self.no_pk, rename_db=self.rename_db, only_pk=self.only_pk,
                         ignore_columns=self.ignore_columns, replace=self.replace, insert_ignore=self.insert_ignore,
                         remove_not_update_col=self.remove_not_update_col
@@ -117,21 +135,41 @@ class Binlog2sql(object):
                     if sql:
                         if self.need_comment != 1:
                             sql = re.sub('; #.*', ';', sql)
-                        print(sql)
+
+                        if f_result_sql_file:
+                            f_result_sql_file.write(sql + '\n')
+                        elif self.table_per_file and db and table:
+                            result_sql_file = os.path.join(self.result_dir, db + '.' + table + '.sql')
+                            save_result_sql(result_sql_file, sql + '\n')
+                        elif self.table_per_file:
+                            result_sql_file = os.path.join(self.result_dir, 'others.sql')
+                            save_result_sql(result_sql_file, sql + '\n')
+                        else:
+                            print(sql)
                 elif is_dml_event(binlog_event) and event_type(binlog_event) in self.sql_type:
                     for row in binlog_event.rows:
-                        sql = concat_sql_from_binlog_event(
+                        sql, db, table = concat_sql_from_binlog_event(
                             cursor=cursor, binlog_event=binlog_event, no_pk=self.no_pk, row=row,
                             flashback=self.flashback, e_start_pos=e_start_pos, rename_db=self.rename_db,
                             only_pk=self.only_pk, ignore_columns=self.ignore_columns, replace=self.replace,
-                            insert_ignore=self.insert_ignore, remove_not_update_col=self.remove_not_update_col
+                            insert_ignore=self.insert_ignore, remove_not_update_col=self.remove_not_update_col,
+                            only_return_sql=False,
                         )
                         try:
                             if sql:
                                 if self.need_comment != 1:
                                     sql = re.sub('; #.*', ';', sql)
-                                print(sql)
-                                # f_tmp.write(sql + '\n')
+
+                                if f_result_sql_file:
+                                    f_result_sql_file.write(sql + '\n')
+                                elif self.table_per_file and db and table:
+                                    result_sql_file = os.path.join(self.result_dir, db + '.' + table + '.sql')
+                                    save_result_sql(result_sql_file, sql + '\n')
+                                elif self.table_per_file:
+                                    result_sql_file = os.path.join(self.result_dir, 'others.sql')
+                                    save_result_sql(result_sql_file, sql + '\n')
+                                else:
+                                    print(sql)
                         except Exception:
                             logger.exception('')
                             logger.error('Error sql: %s' % sql)
@@ -167,7 +205,8 @@ def main(args):
         need_comment=args.need_comment, rename_db=args.rename_db, only_pk=args.only_pk,
         ignore_databases=args.ignore_databases, ignore_tables=args.ignore_tables,
         ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore,
-        remove_not_update_col=args.remove_not_update_col
+        remove_not_update_col=args.remove_not_update_col, table_per_file=args.table_per_file,
+        result_file=args.result_file, result_dir=args.result_dir,
     )
     binlog2sql.process_binlog()
 
