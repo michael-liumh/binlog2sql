@@ -45,6 +45,7 @@ git与pip的安装问题请自行搜索解决。
 * 添加对结果 SQL 中的库名进行重命名的支持，方便解析后直接在另一个实例上执行
 * 添加去除注释的支持，方便解析后直接在另一个实例上执行
 * 添加 binlogfile2sql 忽略虚拟列的支持
+* 添加支持根据 GTID 过滤
 
 测试
 ==============
@@ -57,3 +58,4 @@ TODO
 - [x] 直接解析指定目录下binlog文件（可指定binlog目录前缀，排除非binlog文件）
 - [x] 修复 binlogfile2sql json 数据解析处理的SQL执行不了的 bug
 - [x] 修复 binlogfile2sql start-position 参数不生效的 bug
+- [x] 添加 GTID 支持

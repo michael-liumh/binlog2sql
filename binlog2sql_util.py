@@ -137,6 +137,10 @@ def parse_args():
                           help="Start time. format %%Y-%%m-%%d %%H:%%M:%%S", default='')
     interval.add_argument('--stop-datetime', dest='stop_time', type=str,
                           help="Stop Time. format %%Y-%%m-%%d %%H:%%M:%%S;", default='')
+    interval.add_argument('--include-gtids', dest='include_gtids', type=str,
+                          help="Include Gtids. format @server_uuid:1-10[:20-30][:...]", default='')
+    interval.add_argument('--exclude-gtids', dest='exclude_gtids', type=str,
+                          help="Exclude Gtids. format @server_uuid:1-10[:20-30][:...]", default='')
 
     schema = parser.add_argument_group('schema filter')
     schema.add_argument('-d', '--databases', dest='databases', type=str, nargs='*',
@@ -188,6 +192,7 @@ def parse_args():
                         help='Give a dir to save result_file.')
     result.add_argument('--table-per-file', dest='table_per_file', action='store_true', default=False,
                         help='If set, we will save result sql in table per file instead of result file')
+
     return parser
 
 
@@ -361,7 +366,7 @@ def fix_hex_values(sql: str):
 def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=None, flashback=False, no_pk=False,
                                  rename_db=None, only_pk=False, only_return_sql=True, ignore_columns=None,
                                  replace=False, insert_ignore=False, ignore_virtual_columns=False,
-                                 remove_not_update_col=False):
+                                 remove_not_update_col=False, binlog_gtid=None):
     if flashback and no_pk:
         raise ValueError('only one of flashback or no_pk can be True')
     if not (isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, UpdateRowsEvent)
@@ -390,6 +395,8 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
             sql = fix_hex_values(sql)
         time = datetime.datetime.fromtimestamp(binlog_event.timestamp)
         sql += ' #start %s end %s time %s' % (e_start_pos, binlog_event.packet.log_pos, time)
+        if binlog_gtid:
+            sql += ' gtid %s' % binlog_gtid
     elif flashback is False and isinstance(binlog_event, QueryEvent) and binlog_event.query != 'BEGIN' \
             and binlog_event.query != 'COMMIT':
         if binlog_event.schema:
@@ -604,3 +611,61 @@ def reversed_blocks(fin, block_size=4096):
         here -= delta
         fin.seek(here, os.SEEK_SET)
         yield fin.read(delta)
+
+
+def get_gtid_set(include_gtids, exclude_gtids):
+    # gtid 示例
+    # 35191261-90cd-11e9-9398-00163e0ef40e:2840-134906:134908-183611:183613-351746:360220-364062,
+    # 6ea67fc8-c260-11eb-8c17-00163e0ef40e:1-99954068,
+    # b1f3ee7b-b46d-11eb-9806-00163e0ef40e:4790-196015:196017-2588749,
+    # fcb79f76-b484-11eb-9d4c-00163e047dcb:7273871-7277930
+    gtid_set = {}
+    if include_gtids:
+        gtid_set['include'] = {}
+        gtids = include_gtids.split(',')
+        for gtid in gtids:
+            gtid_splited = gtid.split(':')
+            uuid = gtid_splited[0]
+            if uuid not in gtid_set:
+                gtid_set['include'][uuid] = []
+            txn_range = gtid_splited[1:]
+            gtid_set['include'][uuid].extend(txn_range)
+
+    if exclude_gtids:
+        gtid_set['exclude'] = {}
+        gtids = exclude_gtids.split(',')
+        for gtid in gtids:
+            gtid_splited = gtid.split(':')
+            uuid = gtid_splited[0]
+            if uuid not in gtid_set:
+                gtid_set['exclude'][uuid] = []
+            txn_range = gtid_splited[1:]
+            gtid_set['exclude'][uuid].extend(txn_range)
+
+    return gtid_set
+
+
+def is_want_gtid(gtid_set, gtid):
+    gtid_splited = gtid.split(':')
+    uuid = gtid_splited[0]
+    txn = int(gtid_splited[1])
+    if 'include' in gtid_set and uuid in gtid_set['include']:
+        txn_ranges = gtid_set['include'][uuid]
+        for txn_range in txn_ranges:
+            txn_split = txn_range.split('-')
+            txn_min = int(txn_split[0])
+            txn_max = int(txn_split[1])
+            if txn_min <= txn <= txn_max:
+                return True
+        else:
+            return False
+    elif 'exclude' in gtid_set and uuid in gtid_set['exclude']:
+        txn_ranges = gtid_set['exclude'][uuid]
+        for txn_range in txn_ranges:
+            txn_split = txn_range.split('-')
+            txn_min = int(txn_split[0])
+            txn_max = int(txn_split[1])
+            if txn_min <= txn <= txn_max:
+                return False
+        else:
+            return True

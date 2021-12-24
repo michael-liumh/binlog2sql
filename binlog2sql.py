@@ -6,9 +6,9 @@ import datetime
 import pymysql
 import os
 from pymysqlreplication import BinLogStreamReader
-from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent
+from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent, GtidEvent
 from binlog2sql_util import command_line_args, concat_sql_from_binlog_event, is_dml_event, event_type, logger, \
-    set_log_format
+    set_log_format, get_gtid_set, is_want_gtid
 from binlogfile2sql_util import save_result_sql
 
 sep = '/' if '/' in sys.argv[0] else os.sep
@@ -21,7 +21,8 @@ class Binlog2sql(object):
                  flashback=False, stop_never=False, back_interval=1.0, only_dml=True, sql_type=None,
                  need_comment=1, rename_db=None, only_pk=False, ignore_databases=None, ignore_tables=None,
                  ignore_columns=None, replace=False, insert_ignore=False, remove_not_update_col=False,
-                 table_per_file=False, result_file=None, result_dir=None):
+                 table_per_file=False, result_file=None, result_dir=None,
+                 include_gtids=None, exclude_gtids=None):
         """
         conn_setting: {'host': 127.0.0.1, 'port': 3306, 'user': user, 'passwd': passwd, 'charset': 'utf8'}
         """
@@ -63,6 +64,7 @@ class Binlog2sql(object):
         self.result_file = result_file
         self.result_dir = result_dir
         self.table_per_file = table_per_file
+        self.gtid_set = get_gtid_set(include_gtids, exclude_gtids)
 
         with self.connection as cursor:
             cursor.execute("SHOW MASTER STATUS")
@@ -87,7 +89,6 @@ class Binlog2sql(object):
                                     only_tables=self.only_tables, resume_stream=True, blocking=True,
                                     ignored_schemas=self.ignore_databases, ignored_tables=self.ignore_tables)
 
-        result_sql_file = ''
         f_result_sql_file = ''
         mode = 'w'
         if self.result_file:
@@ -97,10 +98,27 @@ class Binlog2sql(object):
         elif self.table_per_file:
             logger.info(f'Saving table per file into dir: [{self.result_dir}]')
 
+        binlog_gtid = ''
+        gtid_set = True if self.gtid_set else False
         flag_last_event = False
         e_start_pos, last_pos = stream.log_pos, stream.log_pos
         with self.connection as cursor:
             for binlog_event in stream:
+                # 返回的 EVENT 顺序
+                # RotateEvent
+                # FormatDescriptionEvent
+                # GtidEvent
+                # QueryEvent
+                # TableMapEvent
+                # UpdateRowsEvent
+                # XidEvent
+                # GtidEvent
+                # QueryEvent
+                # TableMapEvent
+                # UpdateRowsEvent
+                # XidEvent
+                # GtidEvent
+                # ...
                 if not self.stop_never:
                     try:
                         event_time = datetime.datetime.fromtimestamp(binlog_event.timestamp)
@@ -125,12 +143,18 @@ class Binlog2sql(object):
                 if isinstance(binlog_event, QueryEvent) and binlog_event.query == 'BEGIN':
                     e_start_pos = last_pos
 
+                if isinstance(binlog_event, GtidEvent):
+                    binlog_gtid = str(binlog_event.gtid)
+
                 if isinstance(binlog_event, QueryEvent) and not self.only_dml:
+                    if binlog_gtid and gtid_set and not is_want_gtid(self.gtid_set, binlog_gtid):
+                        continue
+
                     sql, db, table = concat_sql_from_binlog_event(
                         cursor=cursor, binlog_event=binlog_event, only_return_sql=False,
                         flashback=self.flashback, no_pk=self.no_pk, rename_db=self.rename_db, only_pk=self.only_pk,
                         ignore_columns=self.ignore_columns, replace=self.replace, insert_ignore=self.insert_ignore,
-                        remove_not_update_col=self.remove_not_update_col
+                        remove_not_update_col=self.remove_not_update_col, binlog_gtid=binlog_gtid
                     )
                     if sql:
                         if self.need_comment != 1:
@@ -148,12 +172,15 @@ class Binlog2sql(object):
                             print(sql)
                 elif is_dml_event(binlog_event) and event_type(binlog_event) in self.sql_type:
                     for row in binlog_event.rows:
+                        if binlog_gtid and gtid_set and not is_want_gtid(self.gtid_set, binlog_gtid):
+                            continue
+
                         sql, db, table = concat_sql_from_binlog_event(
                             cursor=cursor, binlog_event=binlog_event, no_pk=self.no_pk, row=row,
                             flashback=self.flashback, e_start_pos=e_start_pos, rename_db=self.rename_db,
                             only_pk=self.only_pk, ignore_columns=self.ignore_columns, replace=self.replace,
                             insert_ignore=self.insert_ignore, remove_not_update_col=self.remove_not_update_col,
-                            only_return_sql=False,
+                            only_return_sql=False, binlog_gtid=binlog_gtid,
                         )
                         try:
                             if sql:
@@ -207,6 +234,7 @@ def main(args):
         ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore,
         remove_not_update_col=args.remove_not_update_col, table_per_file=args.table_per_file,
         result_file=args.result_file, result_dir=args.result_dir,
+        include_gtids=args.include_gtids, exclude_gtids=args.exclude_gtids,
     )
     binlog2sql.process_binlog()
 

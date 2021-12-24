@@ -394,6 +394,10 @@ def parse_args():
                                "for example: 2004-12-25 11:25:56 (you should probably use quotes for your shell "
                                "to set it properly).",
                           default='')
+    interval.add_argument('--include-gtids', dest='include_gtids', type=str,
+                          help="Include Gtids. format @server_uuid:1-10[:20-30][:...]", default='')
+    interval.add_argument('--exclude-gtids', dest='exclude_gtids', type=str,
+                          help="Exclude Gtids. format @server_uuid:1-10[:20-30][:...]", default='')
 
     type_filter = parser.add_argument_group('type filter')
     type_filter.add_argument('--only-dml', dest='only_dml', action='store_true', default=False,
