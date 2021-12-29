@@ -9,6 +9,8 @@ import datetime
 import getpass
 import json
 import logging
+from functools import partial
+
 import chardet
 from contextlib import contextmanager
 import colorlog
@@ -188,7 +190,7 @@ def parse_args():
                         help='If set, we will save result sql in this file instead print into stdout.'
                              '(Tip: we will ignore path if give a result file with relative path or absolute path,'
                              'please use --result-dir to set path)')
-    result.add_argument('--result-dir', dest='result_dir', type=str, default='parsed_binlog_results',
+    result.add_argument('--result-dir', dest='result_dir', type=str, default='./',
                         help='Give a dir to save result_file.')
     result.add_argument('--table-per-file', dest='table_per_file', action='store_true', default=False,
                         help='If set, we will save result sql in table per file instead of result file')
@@ -243,7 +245,11 @@ def compare_items(items):
         return '`%s`=%%s' % k
 
 
-def fix_object_bytes(value: bytes):
+def fix_object_bytes(value: bytes, is_bytes_column: bool = True):
+    if is_bytes_column:
+        value = '0x' + value.hex().upper()
+        return value
+
     try:
         encoding = chardet.detect(value).get('encoding', '')
         if not encoding:
@@ -259,7 +265,7 @@ def fix_object_array(value: list):
     for v in value:
         # list里可能同时存在string、bytes(划重点)、array、json
         if isinstance(v, bytes):
-            v = fix_object_bytes(v)
+            v = fix_object_bytes(v, False)
         elif isinstance(v, list):
             v = fix_object_array(v)
         elif isinstance(v, dict):
@@ -275,11 +281,11 @@ def fix_object_json(value: dict):
     for k, v in value.items():
         # json内部 key 可能是字符串或bytes，如果是bytes，则跳转到bytes解析
         if isinstance(k, bytes):
-            k = fix_object_bytes(k)
+            k = fix_object_bytes(k, False)
 
         # json内部的 value 则多种多样，可能为字符串、bytes(划重点)、array、json
         if isinstance(v, bytes):
-            v = fix_object_bytes(v)
+            v = fix_object_bytes(v, False)
         elif isinstance(v, list):
             v = fix_object_array(v)
         elif isinstance(v, dict):
@@ -290,8 +296,11 @@ def fix_object_json(value: dict):
     return new_dict
 
 
-def fix_object(value):
+def fix_object(value, is_return_type: bool = False):
     """Fixes python objects so that they can be properly inserted into SQL queries"""
+    if is_return_type:
+        return type(value)
+
     if isinstance(value, set):
         value = ','.join(value)
     if PY3PLUS and isinstance(value, bytes):
@@ -330,35 +339,42 @@ def event_type(event):
 def handle_list(value: list):
     new_list = []
     for v in value:
-        if isinstance(v, dict):
+        if isinstance(v, dict) or isinstance(v, list):
             try:
                 v = json.dumps(v, ensure_ascii=False)
             except Exception as e:
-                logger.error("Failed to dump dict value to string. Error is:" + str(e))
+                logger.error("Failed to dump dict or list value to string. Error is:" + str(e))
                 logger.error("Error value is:" + str(v))
                 sys.exit(1)
-        elif isinstance(v, list):
-            try:
-                v = json.dumps(v, ensure_ascii=False)
-            except:
-                v = str(v)
         new_list.append(v)
     return new_list
 
 
-def fix_hex_values(sql: str):
+def fix_hex_values(sql: str, values: list, types: list):
     begin = 0
     new_sql = ''
     while sql.find("'0x", begin) > 0:
         # 拿第1个引号的下标
-        idx1 = sql.find("'0x", begin)
+        quote_begin_idx = sql.find("'0x", begin)
         # 拿第2个引号的下标
-        idx2 = sql.find("'", idx1 + 1)
-        new_sql += sql[begin:idx1] + sql[idx1 + 1:idx2]
-        begin = idx2 + 1
+        quote_end_idx = sql.find("'", quote_begin_idx + 1)
+        # 获取 0x 开头的值
+        quote_value = sql[quote_begin_idx + 1:quote_end_idx]
+
+        # 确认 0x 开头的值是十六进制的值，还是字符串
+        quote_value_idx = values.index(quote_value)
+        quote_value_type = types[quote_value_idx]
+        if quote_value_type == str:
+            # 保留原样
+            new_sql += sql[begin:quote_end_idx + 1]
+        else:
+            # 去除 十六进制值 前后的引号
+            new_sql += sql[begin:quote_begin_idx] + sql[quote_begin_idx + 1:quote_end_idx]
+
+        begin = quote_end_idx + 1
 
     if new_sql:
-        new_sql += sql[idx2 + 1:]
+        new_sql += sql[quote_end_idx + 1:]
 
     return new_sql
 
@@ -379,9 +395,9 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
     if isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, UpdateRowsEvent) \
             or isinstance(binlog_event, DeleteRowsEvent):
         # 会调用 fix_object 函数生成sql
-        pattern, db, table = generate_sql_pattern(
+        (pattern, db, table), types = generate_sql_pattern(
             binlog_event, row=row, flashback=flashback, no_pk=no_pk, rename_db=rename_db, only_pk=only_pk,
-            ignore_columns=ignore_columns, replace=replace, insert_ignore=insert_ignore,
+            ignore_columns=ignore_columns, replace=replace, insert_ignore=insert_ignore, return_type=True,
             ignore_virtual_columns=ignore_virtual_columns, remove_not_update_col=remove_not_update_col
         )
 
@@ -392,7 +408,7 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
             pattern_values = pattern['values']
         sql = cursor.mogrify(pattern['template'], pattern_values)
         if "'0x" in str(sql):
-            sql = fix_hex_values(sql)
+            sql = fix_hex_values(sql, pattern_values, types)
         time = datetime.datetime.fromtimestamp(binlog_event.timestamp)
         sql += ' #start %s end %s time %s' % (e_start_pos, binlog_event.packet.log_pos, time)
         if binlog_gtid:
@@ -414,7 +430,7 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
 
 def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, rename_db=None, only_pk=False,
                          ignore_columns=None, replace=False, insert_ignore=False, ignore_virtual_columns=False,
-                         remove_not_update_col=False):
+                         remove_not_update_col=False, return_type=False):
     if ignore_columns and is_dml_event(binlog_event):
         if isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, DeleteRowsEvent):
             for k in row['values'].copy():
@@ -452,8 +468,10 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
 
     template = ''
     values = []
+    types = []
     db = binlog_event.schema
     table = binlog_event.table
+    fix_object_new = partial(fix_object, is_return_type=True)
     if flashback is True:
         if isinstance(binlog_event, WriteRowsEvent):
             db = rename_db if rename_db else binlog_event.schema
@@ -463,6 +481,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                     ' AND '.join(map(compare_items, row['values'].items()))
                 )
                 values = map(fix_object, row['values'].values())
+                types = map(fix_object_new, row['values'].values())
             else:
                 pk_item = {
                     binlog_event.primary_key: row['values'].get(binlog_event.primary_key)
@@ -472,6 +491,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                     ' AND '.join(map(compare_items, pk_item.items()))
                 )
                 values = map(fix_object, pk_item.values())
+                types = map(fix_object_new, row['values'].values())
         elif isinstance(binlog_event, DeleteRowsEvent):
             db = rename_db if rename_db else binlog_event.schema
             if replace:
@@ -493,6 +513,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                     ', '.join(['%s'] * len(row['values']))
                 )
             values = map(fix_object, row['values'].values())
+            types = map(fix_object_new, row['values'].values())
         elif isinstance(binlog_event, UpdateRowsEvent):
             db = rename_db if rename_db else binlog_event.schema
             if not only_pk:
@@ -510,6 +531,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                     ', '.join(['`%s`=%%s' % x for x in row['before_values'].keys()]),
                     ' AND '.join(map(compare_items, pk_item.items())))
                 values = map(fix_object, list(row['before_values'].values()) + list(pk_item.values()))
+                types = map(fix_object_new, list(row['before_values'].values()) + list(pk_item.values()))
     else:
         if isinstance(binlog_event, WriteRowsEvent):
             if no_pk:
@@ -541,12 +563,14 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                     ', '.join(['%s'] * len(row['values']))
                 )
             values = map(fix_object, row['values'].values())
+            types = map(fix_object_new, row['values'].values())
         elif isinstance(binlog_event, DeleteRowsEvent):
             db = rename_db if rename_db else binlog_event.schema
             if not only_pk:
                 template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
                     db, binlog_event.table, ' AND '.join(map(compare_items, row['values'].items())))
                 values = map(fix_object, row['values'].values())
+                types = map(fix_object_new, row['values'].values())
             else:
                 pk_item = {
                     binlog_event.primary_key: row['values'].get(binlog_event.primary_key)
@@ -554,6 +578,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                 template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
                     db, binlog_event.table, ' AND '.join(map(compare_items, pk_item.items())))
                 values = map(fix_object, pk_item.values())
+                types = map(fix_object_new, pk_item.values())
         elif isinstance(binlog_event, UpdateRowsEvent):
             db = rename_db if rename_db else binlog_event.schema
             if not only_pk:
@@ -563,6 +588,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                     ' AND '.join(map(compare_items, row['before_values'].items()))
                 )
                 values = map(fix_object, list(row['after_values'].values()) + list(row['before_values'].values()))
+                types = map(fix_object_new, list(row['after_values'].values()) + list(row['before_values'].values()))
             else:
                 pk_item = {
                     binlog_event.primary_key: row['before_values'].get(binlog_event.primary_key)
@@ -573,12 +599,15 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                     ' AND '.join(map(compare_items, pk_item.items()))
                 )
                 values = map(fix_object, list(row['after_values'].values()) + list(pk_item.values()))
+                types = map(fix_object_new, list(row['after_values'].values()) + list(pk_item.values()))
 
     result = (
         {'template': template, 'values': list(values)},
         db.replace('`', ''),
         table.replace('`', '')
     )
+    if return_type:
+        return result, list(types)
     return result
 
 
@@ -654,7 +683,7 @@ def is_want_gtid(gtid_set, gtid):
         for txn_range in txn_ranges:
             txn_split = txn_range.split('-')
             txn_min = int(txn_split[0])
-            txn_max = int(txn_split[1])
+            txn_max = int(txn_split[1]) if len(txn_split) > 1 else txn_min
             if txn_min <= txn <= txn_max:
                 return True
         else:
@@ -664,7 +693,7 @@ def is_want_gtid(gtid_set, gtid):
         for txn_range in txn_ranges:
             txn_split = txn_range.split('-')
             txn_min = int(txn_split[0])
-            txn_max = int(txn_split[1])
+            txn_max = int(txn_split[1]) if len(txn_split) > 1 else txn_min
             if txn_min <= txn <= txn_max:
                 return False
         else:

@@ -429,7 +429,7 @@ def parse_args():
                         help='When you use --stop-never, we will save executed record in this file'
                              '(Tip: we will ignore path if give a record file with relative path or absolute path,'
                              'please use --result-dir to set path)')
-    result.add_argument('--result-dir', dest='result_dir', type=str, default='parsed_binlog_file_results',
+    result.add_argument('--result-dir', dest='result_dir', type=str, default='./',
                         help='Give a dir to save record_file and result_file in result dir.')
     result.add_argument('--table-per-file', dest='table_per_file', action='store_true', default=False,
                         help='If set, we will save result sql in table per file instead of result file')
