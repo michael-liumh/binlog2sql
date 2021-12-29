@@ -459,6 +459,9 @@ def parse_args():
                                     help='Stop file in binlog file dir', default='')
     binlog_file_filter.add_argument('--check', dest='check', action='store_true',
                                     help='Check binlog file list if you want', default=False)
+    binlog_file_filter.add_argument('--supervisor', dest='supervisor', action='store_true',
+                                    help="When use supervisor manage binlogfile2sql process, we won't exit "
+                                         "if no file select", default=False)
     return parser
 
 

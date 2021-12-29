@@ -196,7 +196,8 @@ def main(args):
 
     if not binlog_file_list:
         logger.error('No file select.')
-        sys.exit(1)
+        if not args.supervisor:
+            sys.exit(1)
 
     if not args.stop_never:
         for i, binlog_file in enumerate(binlog_file_list):
