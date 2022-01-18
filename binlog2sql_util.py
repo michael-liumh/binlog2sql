@@ -9,11 +9,10 @@ import datetime
 import getpass
 import json
 import logging
-from functools import partial
-
 import chardet
-from contextlib import contextmanager
 import colorlog
+from functools import partial
+from contextlib import contextmanager
 from pymysqlreplication.event import QueryEvent
 from pymysqlreplication.row_event import (
     WriteRowsEvent,
@@ -698,3 +697,15 @@ def is_want_gtid(gtid_set, gtid):
                 return False
         else:
             return True
+
+
+def save_result_sql(result_file, msg, mode='a', encoding='utf8'):
+    with open(result_file, mode=mode, encoding=encoding) as f:
+        f.write(msg)
+
+
+def dt_now(datetime_format: str = None) -> str:
+    if datetime_format is None:
+        datetime_format = '%Y%m%d'
+
+    return datetime.datetime.now().strftime(datetime_format)

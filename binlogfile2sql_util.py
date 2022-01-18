@@ -10,10 +10,6 @@ import sys
 from datetime import datetime as dt
 from pymysql.cursors import DictCursor
 from binlog2sql_util import is_valid_datetime, logger, sep
-# from pymysql.constants.COMMAND import COM_BINLOG_DUMP, COM_REGISTER_SLAVE
-# from pymysql.util import int2byte
-#
-# from pymysqlreplication.gtid import GtidSet
 from pymysqlreplication.packet import BinLogPacketWrapper
 from pymysqlreplication.constants.BINLOG import TABLE_MAP_EVENT, ROTATE_EVENT
 from pymysqlreplication.event import (
@@ -573,8 +569,3 @@ def timestamp_to_datetime(ts: int, datetime_format: str = None) -> str:
     datetime_str = datetime_obj.strftime(datetime_format)
 
     return datetime_str
-
-
-def save_result_sql(result_file, msg, mode='a', encoding='utf8'):
-    with open(result_file, mode=mode, encoding=encoding) as f:
-        f.write(msg)
