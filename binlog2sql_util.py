@@ -193,6 +193,9 @@ def parse_args():
                         help='Give a dir to save result_file.')
     result.add_argument('--table-per-file', dest='table_per_file', action='store_true', default=False,
                         help='If set, we will save result sql in table per file instead of result file')
+    result.add_argument('--date-prefix', dest='date_prefix', action='store_true', default=False,
+                        help='If set, we will change table per filename to ${date}_${db}.${tb}.sql '
+                             'default: ${db}.${tb}_${date}.sql')
 
     return parser
 

@@ -429,6 +429,9 @@ def parse_args():
                         help='Give a dir to save record_file and result_file in result dir.')
     result.add_argument('--table-per-file', dest='table_per_file', action='store_true', default=False,
                         help='If set, we will save result sql in table per file instead of result file')
+    result.add_argument('--date-prefix', dest='date_prefix', action='store_true', default=False,
+                        help='If set, we will change table per filename to ${date}_${db}.${tb}.sql '
+                             'default: ${db}.${tb}_${date}.sql')
     result.add_argument('-ma', '--minutes-ago', dest='minutes_ago', type=int, default=3,
                         help='When you use --stop-never, we only parse specify minutes ago of modify time of file.')
     result.add_argument('--need-comment', dest='need_comment', type=int, default=1,

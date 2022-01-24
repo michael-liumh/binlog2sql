@@ -20,7 +20,7 @@ class Binlog2sql(object):
                  flashback=False, stop_never=False, back_interval=1.0, only_dml=True, sql_type=None,
                  need_comment=1, rename_db=None, only_pk=False, ignore_databases=None, ignore_tables=None,
                  ignore_columns=None, replace=False, insert_ignore=False, remove_not_update_col=False,
-                 table_per_file=False, result_file=None, result_dir=None,
+                 result_file=None, result_dir=None, table_per_file=False, date_prefix=False,
                  include_gtids=None, exclude_gtids=None):
         """
         conn_setting: {'host': 127.0.0.1, 'port': 3306, 'user': user, 'passwd': passwd, 'charset': 'utf8'}
@@ -63,6 +63,7 @@ class Binlog2sql(object):
         self.result_file = result_file
         self.result_dir = result_dir
         self.table_per_file = table_per_file
+        self.date_prefix = date_prefix
         self.gtid_set = get_gtid_set(include_gtids, exclude_gtids)
 
         with self.connection as cursor:
@@ -162,10 +163,18 @@ class Binlog2sql(object):
                         if f_result_sql_file:
                             f_result_sql_file.write(sql + '\n')
                         elif self.table_per_file and db and table:
-                            result_sql_file = os.path.join(self.result_dir, db + '.' + table + f'_{dt_now()}.sql')
+                            if self.date_prefix:
+                                filename = f'{dt_now()}.' + db + '.' + table + '.sql'
+                            else:
+                                filename = db + '.' + table + f'.{dt_now()}.sql'
+                            result_sql_file = os.path.join(self.result_dir, filename)
                             save_result_sql(result_sql_file, sql + '\n')
                         elif self.table_per_file:
-                            result_sql_file = os.path.join(self.result_dir, f'others_{dt_now()}.sql')
+                            if self.date_prefix:
+                                filename = f'{dt_now()}.others.sql'
+                            else:
+                                filename = f'others.{dt_now()}.sql'
+                            result_sql_file = os.path.join(self.result_dir, filename)
                             save_result_sql(result_sql_file, sql + '\n')
                         else:
                             print(sql)
@@ -189,11 +198,18 @@ class Binlog2sql(object):
                                 if f_result_sql_file:
                                     f_result_sql_file.write(sql + '\n')
                                 elif self.table_per_file and db and table:
-                                    result_sql_file = os.path.join(self.result_dir, db + '.' + table +
-                                                                   f'_{dt_now()}.sql')
+                                    if self.date_prefix:
+                                        filename = f'{dt_now()}.' + db + '.' + table + '.sql'
+                                    else:
+                                        filename = db + '.' + table + f'.{dt_now()}.sql'
+                                    result_sql_file = os.path.join(self.result_dir, filename)
                                     save_result_sql(result_sql_file, sql + '\n')
                                 elif self.table_per_file:
-                                    result_sql_file = os.path.join(self.result_dir, f'others_{dt_now()}.sql')
+                                    if self.date_prefix:
+                                        filename = f'{dt_now()}.others.sql'
+                                    else:
+                                        filename = f'others.{dt_now()}.sql'
+                                    result_sql_file = os.path.join(self.result_dir, filename)
                                     save_result_sql(result_sql_file, sql + '\n')
                                 else:
                                     print(sql)
@@ -233,7 +249,7 @@ def main(args):
         ignore_databases=args.ignore_databases, ignore_tables=args.ignore_tables,
         ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore,
         remove_not_update_col=args.remove_not_update_col, table_per_file=args.table_per_file,
-        result_file=args.result_file, result_dir=args.result_dir,
+        result_file=args.result_file, result_dir=args.result_dir, date_prefix=args.date_prefix,
         include_gtids=args.include_gtids, exclude_gtids=args.exclude_gtids,
     )
     binlog2sql.process_binlog()

@@ -71,7 +71,8 @@ git与pip的安装问题请自行搜索解决。
 | --result-file  | 将生成的结果保存到指定的文件中（请直接指定文件名，不要添加目录，添加了也会自动去除，请用 --result-dir 指定目录） |
 | --record-file  | 当使用 --stop-never 参数时，自动记录解析过的 binlog 文件（仅对解析 binlog 文件生效） |
 | --result-dir  | 指定生成结果文件的报存目录 |
-| --table-per-file | 当使用 --stop-never 参数解析本地 binlog 时，输出的结果将按《库名.表名.sql》的格式保存到对应的文件中 |
+| --table-per-file | 当使用 --stop-never 参数解析本地 binlog 时，输出的结果将按《库名.表名.日期.sql》的格式保存到对应的文件中 |
+| --date-prefix | 当使用 --table-per-file 参数解析本地 binlog 时，输出的结果将按《日期.库名.表名.sql》的格式保存到对应的文件中 |
 | -ma, --minutes-ago | 当解析本地 binlog 时，只解析最后修改时间在 n 分钟前的文件（可用这个参数排除还没记录完的 binlog，不想排除的话，直接参数值为 0 即可） |
 | --need-comment | 选择输出的 SQL 是否需要保留注释，注释内容包括这条 SQL 在 binlog 中的起始位点、结束位点、gtid值，值为 1 表示保留（默认），0 表示不保留 |
 | --rename-db | 选择将输出的 SQL 的库名统一改成指定的库名（方便将多个库同一个表的 SQL 整合到一个库中进行后续的分析） |
