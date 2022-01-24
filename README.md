@@ -54,8 +54,8 @@ git与pip的安装问题请自行搜索解决。
 | -it, --ignore-tables  | 排查数据指定表的 SQL |
 | -ic, --ignore-columns  | 过滤掉 SQL 中的指定的列 |
 | --ignore-virtual-columns  | 过滤掉 SQL 中的虚拟列 |
-| --start-position, --start-pos  | 指定 binlog 的起始位点（解析多个本地 binlog 时请不要使用这个参数，否则后续的 binlog 都会套用这个参数） |
-| --stop-position, --stop-pos  | 指定 binlog 的结束位点（解析多个本地 binlog 时请不要使用这个参数，否则后续的 binlog 都会套用这个参数） |
+| --start-position, --start-pos  | 指定 binlog 的起始位点 |
+| --stop-position, --stop-pos  | 指定 binlog 的结束位点 |
 | --start-datetime  | 解析 binlog 中指定开始时间后的 SQL |
 | --stop-datetime  | 解析 binlog 中指定结束时间前的 SQL |
 | --include-gtids  | 只输出指定 gtid 的 SQL |

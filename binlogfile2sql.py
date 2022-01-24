@@ -218,6 +218,9 @@ def main(args):
 
     if not args.stop_never:
         for i, binlog_file in enumerate(binlog_file_list):
+            if i != 0:
+                args.start_pos = None
+                args.end_pos = None
             logger.info('parsing binlog file: %s [%s]' %
                         (binlog_file, timestamp_to_datetime(os.stat(binlog_file).st_mtime)))
             bin2sql = BinlogFile2sql(
@@ -235,7 +238,10 @@ def main(args):
             bin2sql.process_binlog()
     else:
         while True:
-            for binlog_file in binlog_file_list:
+            for i, binlog_file in enumerate(binlog_file_list):
+                if i != 0:
+                    args.start_pos = None
+                    args.end_pos = None
                 logger.info('parsing binlog file: %s [%s]' %
                             (binlog_file, timestamp_to_datetime(os.stat(binlog_file).st_mtime)))
                 bin2sql = BinlogFile2sql(
