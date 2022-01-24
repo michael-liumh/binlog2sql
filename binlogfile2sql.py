@@ -218,7 +218,7 @@ def main(args):
 
     if not args.stop_never:
         for i, binlog_file in enumerate(binlog_file_list):
-            if i != 0:
+            if not (i == 0 and binlog_file == args.start_file):
                 args.start_pos = None
                 args.end_pos = None
             logger.info('parsing binlog file: %s [%s]' %
@@ -239,7 +239,7 @@ def main(args):
     else:
         while True:
             for i, binlog_file in enumerate(binlog_file_list):
-                if i != 0:
+                if not (i == 0 and binlog_file == args.start_file):
                     args.start_pos = None
                     args.end_pos = None
                 logger.info('parsing binlog file: %s [%s]' %
