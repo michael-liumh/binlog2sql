@@ -338,7 +338,8 @@ def get_sql_file_list(args):
                     continue
                 if args.stop_file and f > args.stop_file:
                     break
-                if re.search(args.file_regex, f) is None and re.search(args.exclude_file_regex, f) is not None:
+                if (args.file_regex and re.search(args.file_regex, f) is None) or \
+                        (args.exclude_file_regex and re.search(args.exclude_file_regex, f) is not None):
                     continue
 
                 sql_file = os.path.join(current_dir, f)
@@ -347,7 +348,8 @@ def get_sql_file_list(args):
                 file_list.append(sql_file)
     else:
         for f in args.file_path:
-            if re.search(args.file_regex, f) is not None and re.search(args.exclude_file_regex, f) is None:
+            if (args.file_regex and re.search(args.file_regex, f) is not None) and \
+                    (args.exclude_file_regex and re.search(args.exclude_file_regex, f) is None):
                 if not f.startswith('/') and args.file_dir:
                     if not os.path.join(args.file_dir, f).startswith('.'):
                         sql_file = os.path.join(args.file_dir, f)
