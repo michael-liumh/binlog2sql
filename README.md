@@ -84,6 +84,7 @@ git与pip的安装问题请自行搜索解决。
 | --stop-file | 通过字符串比较的方式，指定选择的目录下的结束的 binlog 文件 |
 | --check | 检查指定目录下被过滤的 binlog 文件是否符合预期 |
 | --supervisor | 用 supervisor 管理后台解析进程 |
+| --update-to-replace | 将 UPDATE 语句转化成 REPLACE INTO 语句 |
 
 测试
 ==============

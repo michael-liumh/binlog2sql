@@ -441,6 +441,8 @@ def parse_args():
                         help='Rename source dbs to one db.')
     result.add_argument('--remove-not-update-col', dest='remove_not_update_col', action='store_true', default=False,
                         help='If set, we will remove not update column in update statements (exclude primary key)')
+    result.add_argument('--update-to-replace', dest='update_to_replace', action='store_true', default=False,
+                        help='If set, we will change update statement to replace statement.')
 
     binlog_file_filter = parser.add_argument_group('binlog file filter')
     binlog_file_filter.add_argument('-f', '--file-path', dest='file_path', type=str, nargs='*',
