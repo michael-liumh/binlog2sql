@@ -51,7 +51,7 @@ git与pip的安装问题请自行搜索解决。
 | -d, --databases  | 选择输出指定库的 SQL |
 | -t, --tables  | 选择输出指定表的 SQL |
 | -id, --ignore-databases  | 排除输出指定库的 SQL |
-| -it, --ignore-tables  | 排查数据指定表的 SQL |
+| -it, --ignore-tables  | 排除数据指定表的 SQL |
 | -ic, --ignore-columns  | 过滤掉 SQL 中的指定的列 |
 | --ignore-virtual-columns  | 过滤掉 SQL 中的虚拟列 |
 | --start-position, --start-pos  | 指定 binlog 的起始位点 |
