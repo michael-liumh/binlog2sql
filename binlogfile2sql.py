@@ -218,7 +218,7 @@ def main(args):
         if not args.supervisor:
             sys.exit(1)
 
-    if not args.stop_never:
+    while True:
         for i, binlog_file in enumerate(binlog_file_list):
             if not (i == 0 and binlog_file == args.start_file):
                 args.start_pos = None
@@ -227,48 +227,33 @@ def main(args):
                         (binlog_file, timestamp_to_datetime(os.stat(binlog_file).st_mtime)))
             bin2sql = BinlogFile2sql(
                 file_path=binlog_file, connection_settings=connection_settings, start_pos=args.start_pos,
-                end_pos=args.end_pos, start_time=args.start_time, stop_time=args.stop_time, only_schemas=args.databases,
-                need_comment=args.need_comment, only_tables=args.tables, no_pk=args.no_pk, flashback=args.flashback,
-                only_dml=args.only_dml, sql_type=args.sql_type, rename_db=args.rename_db, only_pk=args.only_pk,
-                result_file=args.result_file, table_per_file=args.table_per_file, result_dir=args.result_dir,
+                end_pos=args.end_pos, start_time=args.start_time, stop_time=args.stop_time,
+                only_schemas=args.databases, result_dir=args.result_dir, only_tables=args.tables, no_pk=args.no_pk,
+                flashback=args.flashback, only_dml=args.only_dml, sql_type=args.sql_type,
+                stop_never=args.stop_never, need_comment=args.need_comment, rename_db=args.rename_db,
+                only_pk=args.only_pk, result_file=args.result_file, table_per_file=args.table_per_file,
                 ignore_databases=args.ignore_databases, ignore_tables=args.ignore_tables,
                 ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore,
-                ignore_virtual_columns=args.ignore_virtual_columns, file_index=i,
-                remove_not_update_col=args.remove_not_update_col, date_prefix=args.date_prefix,
+                ignore_virtual_columns=args.ignore_virtual_columns, date_prefix=args.date_prefix,
+                remove_not_update_col=args.remove_not_update_col,
                 include_gtids=args.include_gtids, exclude_gtids=args.exclude_gtids,
                 update_to_replace=args.update_to_replace
             )
-            bin2sql.process_binlog()
-    else:
-        while True:
-            for i, binlog_file in enumerate(binlog_file_list):
-                if not (i == 0 and binlog_file == args.start_file):
-                    args.start_pos = None
-                    args.end_pos = None
-                logger.info('parsing binlog file: %s [%s]' %
-                            (binlog_file, timestamp_to_datetime(os.stat(binlog_file).st_mtime)))
-                bin2sql = BinlogFile2sql(
-                    file_path=binlog_file, connection_settings=connection_settings, start_pos=args.start_pos,
-                    end_pos=args.end_pos, start_time=args.start_time, stop_time=args.stop_time,
-                    only_schemas=args.databases, result_dir=args.result_dir, only_tables=args.tables, no_pk=args.no_pk,
-                    flashback=args.flashback, only_dml=args.only_dml, sql_type=args.sql_type,
-                    stop_never=args.stop_never, need_comment=args.need_comment, rename_db=args.rename_db,
-                    only_pk=args.only_pk, result_file=args.result_file, table_per_file=args.table_per_file,
-                    ignore_databases=args.ignore_databases, ignore_tables=args.ignore_tables,
-                    ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore,
-                    ignore_virtual_columns=args.ignore_virtual_columns, date_prefix=args.date_prefix,
-                    remove_not_update_col=args.remove_not_update_col,
-                    include_gtids=args.include_gtids, exclude_gtids=args.exclude_gtids,
-                    update_to_replace=args.update_to_replace
-                )
-                r = bin2sql.process_binlog()
-                if r is True:
-                    executed_file_list.append(binlog_file)
-                    save_executed_result(args.record_file, executed_file_list)
-            binlog_file_list, executed_file_list = get_binlog_file_list(args)
-            if not binlog_file_list:
-                # logger.info('All file has been executed, sleep 60 seconds to get other new files.')
-                time.sleep(60)
+            r = bin2sql.process_binlog()
+            if not args.stop_never:
+                continue
+
+            if r is True:
+                executed_file_list.append(binlog_file)
+                save_executed_result(args.record_file, executed_file_list)
+
+        if not args.stop_never:
+            break
+
+        binlog_file_list, executed_file_list = get_binlog_file_list(args)
+        if not binlog_file_list:
+            # logger.info('All file has been executed, sleep 60 seconds to get other new files.')
+            time.sleep(60)
 
 
 if __name__ == '__main__':
