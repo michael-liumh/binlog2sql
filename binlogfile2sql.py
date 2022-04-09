@@ -229,7 +229,7 @@ def main(args):
                 file_path=binlog_file, connection_settings=connection_settings, start_pos=args.start_pos,
                 end_pos=args.end_pos, start_time=args.start_time, stop_time=args.stop_time,
                 only_schemas=args.databases, result_dir=args.result_dir, only_tables=args.tables, no_pk=args.no_pk,
-                flashback=args.flashback, only_dml=args.only_dml, sql_type=args.sql_type,
+                flashback=args.flashback, only_dml=args.only_dml, sql_type=args.sql_type, file_index=i,
                 stop_never=args.stop_never, need_comment=args.need_comment, rename_db=args.rename_db,
                 only_pk=args.only_pk, result_file=args.result_file, table_per_file=args.table_per_file,
                 ignore_databases=args.ignore_databases, ignore_tables=args.ignore_tables,

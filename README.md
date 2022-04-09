@@ -10,6 +10,7 @@ cd binlog2sql && \
 pip3 install -r requirements.txt
 ```
 git与pip的安装问题请自行搜索解决。
+推荐使用 pypy3 运行，效率会比 python3 高
 
 修改
 ==============
