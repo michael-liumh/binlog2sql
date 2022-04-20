@@ -185,6 +185,11 @@ def parse_args():
                         help='Rename source dbs to one db.')
     result.add_argument('--remove-not-update-col', dest='remove_not_update_col', action='store_true', default=False,
                         help='If set, we will remove not update column in update statements (exclude primary key)')
+    result.add_argument('--keep', '--keep-not-update-col', dest='keep_not_update_col', type=str, nargs='*',
+                        help="If set --remove-not-update-col and --keep-not-update-col, "
+                             "we won't remove some col if you want to keep")
+    result.add_argument('--update-to-replace', dest='update_to_replace', action='store_true', default=False,
+                        help='If set, we will change update statement to replace statement.')
     result.add_argument('--result-file', dest='result_file', type=str,
                         help='If set, we will save result sql in this file instead print into stdout.'
                              '(Tip: we will ignore path if give a result file with relative path or absolute path,'
@@ -196,9 +201,6 @@ def parse_args():
     result.add_argument('--date-prefix', dest='date_prefix', action='store_true', default=False,
                         help='If set, we will change table per filename to ${date}_${db}.${tb}.sql '
                              'default: ${db}.${tb}_${date}.sql')
-    result.add_argument('--update-to-replace', dest='update_to_replace', action='store_true', default=False,
-                        help='If set, we will change update statement to replace statement.')
-
     return parser
 
 
@@ -386,7 +388,8 @@ def fix_hex_values(sql: str, values: list, types: list):
 def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=None, flashback=False, no_pk=False,
                                  rename_db=None, only_pk=False, only_return_sql=True, ignore_columns=None,
                                  replace=False, insert_ignore=False, ignore_virtual_columns=False,
-                                 remove_not_update_col=False, binlog_gtid=None, update_to_replace=False):
+                                 remove_not_update_col=False, binlog_gtid=None, update_to_replace=False,
+                                 keep_not_update_col: list = None):
     if flashback and no_pk:
         raise ValueError('only one of flashback or no_pk can be True')
     if not (isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, UpdateRowsEvent)
@@ -403,7 +406,7 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
             binlog_event, row=row, flashback=flashback, no_pk=no_pk, rename_db=rename_db, only_pk=only_pk,
             ignore_columns=ignore_columns, replace=replace, insert_ignore=insert_ignore, return_type=True,
             ignore_virtual_columns=ignore_virtual_columns, remove_not_update_col=remove_not_update_col,
-            update_to_replace=update_to_replace
+            update_to_replace=update_to_replace, keep_not_update_col=keep_not_update_col
         )
 
         # cursor.mogrify 处理 value 时，会返回一个字符串，如果 value 里包含 dict，则会报错
@@ -435,7 +438,8 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
 
 def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, rename_db=None, only_pk=False,
                          ignore_columns=None, replace=False, insert_ignore=False, ignore_virtual_columns=False,
-                         remove_not_update_col=False, return_type=False, update_to_replace=False):
+                         remove_not_update_col=False, return_type=False, update_to_replace=False,
+                         keep_not_update_col: list = None):
     if ignore_columns and is_dml_event(binlog_event):
         if isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, DeleteRowsEvent):
             for k in row['values'].copy():
@@ -467,6 +471,8 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
             if old_v == new_v:
                 if k == binlog_event.primary_key:
                     row['after_values'].pop(k)
+                elif k in keep_not_update_col:
+                    continue
                 else:
                     row['before_values'].pop(k)
                     row['after_values'].pop(k)

@@ -23,7 +23,8 @@ class BinlogFile2sql(object):
                  rename_db=None, only_pk=False, result_file=None, table_per_file=False, insert_ignore=False,
                  ignore_databases=None, ignore_tables=None, ignore_columns=None, replace=False,
                  ignore_virtual_columns=False, file_index=0, remove_not_update_col=False, date_prefix=False,
-                 include_gtids=None, exclude_gtids=None, update_to_replace=False):
+                 include_gtids=None, exclude_gtids=None, update_to_replace=False,
+                 keep_not_update_col: list = None):
         """
         connection_settings: {'host': 127.0.0.1, 'port': 3306, 'user': slave, 'passwd': slave}
         """
@@ -66,6 +67,7 @@ class BinlogFile2sql(object):
         self.remove_not_update_col = remove_not_update_col
         self.gtid_set = get_gtid_set(include_gtids, exclude_gtids)
         self.update_to_replace = update_to_replace
+        self.keep_not_update_col = keep_not_update_col
 
     def process_binlog(self):
         stream = BinLogFileReader(self.file_path, ctl_connection_settings=self.connection_settings,
@@ -129,7 +131,8 @@ class BinlogFile2sql(object):
                         rename_db=self.rename_db, only_pk=self.only_pk, only_return_sql=False,
                         ignore_columns=self.ignore_columns, replace=self.replace, insert_ignore=self.insert_ignore,
                         ignore_virtual_columns=self.ignore_virtual_columns, binlog_gtid=binlog_gtid,
-                        remove_not_update_col=self.remove_not_update_col, update_to_replace=self.update_to_replace
+                        remove_not_update_col=self.remove_not_update_col, update_to_replace=self.update_to_replace,
+                        keep_not_update_col=self.keep_not_update_col
                     )
                     if sql:
                         if self.need_comment != 1:
@@ -163,7 +166,7 @@ class BinlogFile2sql(object):
                             only_return_sql=False, ignore_columns=self.ignore_columns, replace=self.replace,
                             insert_ignore=self.insert_ignore, ignore_virtual_columns=self.ignore_virtual_columns,
                             remove_not_update_col=self.remove_not_update_col, binlog_gtid=binlog_gtid,
-                            update_to_replace=self.update_to_replace
+                            update_to_replace=self.update_to_replace, keep_not_update_col=self.keep_not_update_col
                         )
                         if sql:
                             if self.need_comment != 1:
@@ -237,7 +240,7 @@ def main(args):
                 ignore_virtual_columns=args.ignore_virtual_columns, date_prefix=args.date_prefix,
                 remove_not_update_col=args.remove_not_update_col,
                 include_gtids=args.include_gtids, exclude_gtids=args.exclude_gtids,
-                update_to_replace=args.update_to_replace
+                update_to_replace=args.update_to_replace, keep_not_update_col=args.keep_not_update_col
             )
             r = bin2sql.process_binlog()
             if not args.stop_never:

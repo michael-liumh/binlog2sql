@@ -441,6 +441,9 @@ def parse_args():
                         help='Rename source dbs to one db.')
     result.add_argument('--remove-not-update-col', dest='remove_not_update_col', action='store_true', default=False,
                         help='If set, we will remove not update column in update statements (exclude primary key)')
+    result.add_argument('--keep', '--keep-not-update-col', dest='keep_not_update_col', type=str, nargs='*',
+                        help="If set --remove-not-update-col and --keep-not-update-col, "
+                             "we won't remove some col if you want to keep")
     result.add_argument('--update-to-replace', dest='update_to_replace', action='store_true', default=False,
                         help='If set, we will change update statement to replace statement.')
 

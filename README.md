@@ -77,7 +77,9 @@ git与pip的安装问题请自行搜索解决。
 | -ma, --minutes-ago | 当解析本地 binlog 时，只解析最后修改时间在 n 分钟前的文件（可用这个参数排除还没记录完的 binlog，不想排除的话，直接参数值为 0 即可） |
 | --need-comment | 选择输出的 SQL 是否需要保留注释，注释内容包括这条 SQL 在 binlog 中的起始位点、结束位点、gtid值，值为 1 表示保留（默认），0 表示不保留 |
 | --rename-db | 选择将输出的 SQL 的库名统一改成指定的库名（方便将多个库同一个表的 SQL 整合到一个库中进行后续的分析） |
-| --remove-not-update-col | 排除 UPDATE 语句中未被更新的字段（默认输出完整的更新前后的值） ||
+| --remove-not-update-col | 排除 UPDATE 语句中未被更新的字段（默认输出完整的更新前后的值） |
+| --keep, --keep-not-update-col | 当使用--remove-not-update-col参数来排除 UPDATE 语句中未被更新的字段时，会保留一些没更新的，但你想保留的字段，多个字段用空格分隔。示例：--remove-not-update-col --keep id col1 col2 |
+| --update-to-replace | 将 UPDATE 语句转化成 REPLACE INTO 语句 |
 | -f, --file-path | 解析指定的本地 binlog 文件 |
 | -fd, --file-dir | 解析指定目录下的所有本地 binlog 文件（可用下面的参数过滤） |
 | -fr, --file-regex | 使用正则表达式指定选择的目录下的 binlog 文件 |
@@ -85,7 +87,6 @@ git与pip的安装问题请自行搜索解决。
 | --stop-file | 通过字符串比较的方式，指定选择的目录下的结束的 binlog 文件 |
 | --check | 检查指定目录下被过滤的 binlog 文件是否符合预期 |
 | --supervisor | 用 supervisor 管理后台解析进程 |
-| --update-to-replace | 将 UPDATE 语句转化成 REPLACE INTO 语句 |
 
 测试
 ==============

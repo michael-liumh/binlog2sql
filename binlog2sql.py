@@ -21,7 +21,7 @@ class Binlog2sql(object):
                  need_comment=1, rename_db=None, only_pk=False, ignore_databases=None, ignore_tables=None,
                  ignore_columns=None, replace=False, insert_ignore=False, remove_not_update_col=False,
                  result_file=None, result_dir=None, table_per_file=False, date_prefix=False,
-                 include_gtids=None, exclude_gtids=None, update_to_replace=False):
+                 include_gtids=None, exclude_gtids=None, update_to_replace=False, keep_not_update_col: list = None):
         """
         conn_setting: {'host': 127.0.0.1, 'port': 3306, 'user': user, 'passwd': passwd, 'charset': 'utf8'}
         """
@@ -66,6 +66,7 @@ class Binlog2sql(object):
         self.date_prefix = date_prefix
         self.gtid_set = get_gtid_set(include_gtids, exclude_gtids)
         self.update_to_replace = update_to_replace
+        self.keep_not_update_col = keep_not_update_col
 
         with self.connection as cursor:
             cursor.execute("SHOW MASTER STATUS")
@@ -156,7 +157,7 @@ class Binlog2sql(object):
                         flashback=self.flashback, no_pk=self.no_pk, rename_db=self.rename_db, only_pk=self.only_pk,
                         ignore_columns=self.ignore_columns, replace=self.replace, insert_ignore=self.insert_ignore,
                         remove_not_update_col=self.remove_not_update_col, binlog_gtid=binlog_gtid,
-                        update_to_replace=self.update_to_replace
+                        update_to_replace=self.update_to_replace, keep_not_update_col=self.keep_not_update_col
                     )
                     if sql:
                         if self.need_comment != 1:
@@ -190,7 +191,8 @@ class Binlog2sql(object):
                             flashback=self.flashback, e_start_pos=e_start_pos, rename_db=self.rename_db,
                             only_pk=self.only_pk, ignore_columns=self.ignore_columns, replace=self.replace,
                             insert_ignore=self.insert_ignore, remove_not_update_col=self.remove_not_update_col,
-                            only_return_sql=False, binlog_gtid=binlog_gtid, update_to_replace=self.update_to_replace
+                            only_return_sql=False, binlog_gtid=binlog_gtid, update_to_replace=self.update_to_replace,
+                            keep_not_update_col=self.keep_not_update_col
                         )
                         try:
                             if sql:
@@ -252,7 +254,8 @@ def main(args):
         ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore,
         remove_not_update_col=args.remove_not_update_col, table_per_file=args.table_per_file,
         result_file=args.result_file, result_dir=args.result_dir, date_prefix=args.date_prefix,
-        include_gtids=args.include_gtids, exclude_gtids=args.exclude_gtids, update_to_replace=args.update_to_replace
+        include_gtids=args.include_gtids, exclude_gtids=args.exclude_gtids, update_to_replace=args.update_to_replace,
+        keep_not_update_col=args.keep_not_update_col
     )
     binlog2sql.process_binlog()
 
