@@ -471,7 +471,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
             if old_v == new_v:
                 if k == binlog_event.primary_key:
                     row['after_values'].pop(k)
-                elif k in keep_not_update_col:
+                elif keep_not_update_col and k in keep_not_update_col:
                     continue
                 else:
                     row['before_values'].pop(k)
