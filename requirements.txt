@@ -4,3 +4,4 @@ mysql-replication==0.23
 colorlog==5.0.1
 chardet==3.0.4
 cryptography==36.0.1
+rich==12.2.0
