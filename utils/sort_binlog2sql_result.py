@@ -185,7 +185,7 @@ def main(args):
         for i, (filename, _) in track(enumerate(record_list), total=len(record_list), description='re-saving...'):
             filepath = os.path.join(args.tmp_dir, filename)
             file_lines = read_file(filepath, args.encoding)
-            get_min_max_val(file_lines)
+            file_lines.sort(key=sort_by_time)
             if i == 0:
                 save_to_file(args.dst_file, file_lines, encoding=args.encoding, mode='w')
             else:
