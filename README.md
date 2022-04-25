@@ -90,7 +90,8 @@ git与pip的安装问题请自行搜索解决。
 
 测试
 ==============
-* 仅测试了mysql 5.7、python 3.8.5
+* mysql 测试版本：mysql 5.7.32、mysql 8.0.24
+* python测试版本：python 3.8.5
 
 TODO
 ==============
