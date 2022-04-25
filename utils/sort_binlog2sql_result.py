@@ -93,9 +93,13 @@ def sort_by_index(x: list):
     return x[0]
 
 
+def get_sql_time(line):
+    return re.search('\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', line).group()
+
+
 def sort_by_time(x: str):
     x_split = x.split('#start ')[-1]
-    return re.search('\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', x_split).group()
+    return get_sql_time(x_split)
 
 
 def sort_by_min_val(x: list):
@@ -104,7 +108,9 @@ def sort_by_min_val(x: list):
 
 def get_min_max_val(tmp_list: list):
     tmp_list.sort(key=sort_by_time)
-    return tmp_list[0], tmp_list[-1]
+    min_val = get_sql_time(tmp_list[0])
+    max_val = get_sql_time(tmp_list[-1])
+    return min_val, max_val
 
 
 def get_file_line_count(filename):
@@ -142,32 +148,28 @@ def main(args):
         record_dict = dict()
         for tmp_list in track(yield_file(args.src_file, args.encoding, args.chunk_size),
                               total=total_part, description='sorting...'):
+            # 获取最小值和最大值的时候，会排序
             min_val, max_val = get_min_max_val(tmp_list)
             if record_dict:
-                tmp_filename = ''
-                for filename, (record_min_val, record_max_val) in record_dict.items():
-                    if record_min_val <= min_val <= record_max_val:
-                        tmp_filename = filename
-                        break
+                for _ in tmp_list.copy():
+                    line = tmp_list.pop(0)
+                    tmp_result = sort_by_time(line)
+                    break_sign = 0
 
-                if tmp_filename:
-                    for _ in tmp_list.copy():
-                        line = tmp_list.pop(0)
-                        tmp_result = sort_by_time(line)
-                        break_sign = 0
-
-                        for filename, (record_min_val, record_max_val) in record_dict.items():
-                            if record_min_val <= tmp_result <= record_max_val:
-                                filepath = os.path.join(args.tmp_dir, filename)
-                                save_to_file(filepath, line, args.encoding, 'a')
-                                break
-                        else:
-                            break_sign = 1
-
-                        if break_sign == 1:
-                            tmp_list.append(line)
-                            min_val, max_val = get_min_max_val(tmp_list)
+                    # tmp_list 里的数据已经排好序了，如果轮询到某行匹配不到前面的最小值和最大值区间的话，
+                    # 后面的就不需要再匹配了
+                    for filename, (record_min_val, record_max_val) in record_dict.items():
+                        if record_min_val <= tmp_result <= record_max_val:
+                            filepath = os.path.join(args.tmp_dir, filename)
+                            save_to_file(filepath, line, args.encoding, 'a')
                             break
+                    else:
+                        break_sign = 1
+
+                    if break_sign == 1:
+                        tmp_list.append(line)
+                        min_val, max_val = get_min_max_val(tmp_list)
+                        break
 
             tmp_filename = str(uuid.uuid4())
             record_dict[tmp_filename] = [min_val, max_val]
