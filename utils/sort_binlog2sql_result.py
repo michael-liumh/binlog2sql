@@ -8,6 +8,8 @@ import sys
 import re
 import uuid
 from rich.progress import track
+parent_dir = '/'.join(os.path.dirname(os.path.abspath(__file__)).split(os.sep)[0:-1])
+sys.path.append(parent_dir)
 from binlog2sql_util import logger
 
 
