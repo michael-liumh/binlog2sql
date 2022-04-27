@@ -75,16 +75,23 @@ def parse_command_line_args(args):
     if not args.dst_file:
         args.dst_file = args.src_file + '.new'
 
-    if not os.path.isdir(args.tmp_dir):
+    os.makedirs(args.tmp_dir, exist_ok=True)
+    while not check_dir_if_empty(args.tmp_dir):
+        args.tmp_dir = os.path.join(args.tmp_dir, 'tmp/')
         os.makedirs(args.tmp_dir, exist_ok=True)
-        while os.listdir(args.tmp_dir) != list():
-            args.tmp_dir = os.path.join(args.tmp_dir, 'tmp/')
-            os.makedirs(args.tmp_dir, exist_ok=True)
 
     if args.sort_type not in ['reverse_seq', 'sort_by_time']:
         logger.error(f'Invalid sort type: [{args.sort_type}]')
         sys.exit(1)
     return args
+
+
+def check_dir_if_empty(dir_path):
+    try:
+        next(os.scandir(dir_path))
+        return False
+    except StopIteration:
+        return True
 
 
 def read_file(filename, encoding: str = 'utf8'):

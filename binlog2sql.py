@@ -10,6 +10,7 @@ from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionE
 from binlog2sql_util import command_line_args, concat_sql_from_binlog_event, is_dml_event, event_type, logger, \
     set_log_format, get_gtid_set, is_want_gtid, save_result_sql, dt_now, create_unique_file, temp_open, \
     handle_rollback_sql
+from utils.sort_binlog2sql_result_utils import check_dir_if_empty
 
 sep = '/' if '/' in sys.argv[0] else os.sep
 
@@ -94,7 +95,7 @@ class Binlog2sql(object):
 
     def init_tmp_dir(self):
         os.makedirs(self.tmp_dir, exist_ok=True)
-        while os.listdir(self.tmp_dir) != list():
+        while not check_dir_if_empty(self.tmp_dir):
             self.tmp_dir = os.path.join(self.tmp_dir, 'tmp')
             os.makedirs(self.tmp_dir, exist_ok=True)
 
