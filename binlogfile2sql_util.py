@@ -27,7 +27,7 @@ except ImportError:
     # See: https://github.com/PyMySQL/PyMySQL/pull/261
     COM_BINLOG_DUMP_GTID = 0x1e
 
-from io import StringIO, BytesIO
+from io import BytesIO
 from pymysql.util import byte2int
 
 # 2013 Connection Lost
@@ -416,6 +416,12 @@ def parse_args():
     event.add_argument('--insert-ignore', dest='insert_ignore', action='store_true',
                        help='Insert rows with INSERT IGNORE.', default=False)
 
+    tmp = parser.add_argument_group('handle tmp options')
+    tmp.add_argument('--tmp-dir', dest='tmp_dir', type=str, default='tmp',
+                     help="Dir for handle tmp file")
+    tmp.add_argument('--chunk', dest='chunk', type=int, default=1000,
+                     help="Handle chunks of rollback sql from tmp file")
+
     result = parser.add_argument_group('result filter')
     result.add_argument('--result-file', dest='result_file', type=str,
                         help='If set, we will save result sql in this file instead print into stdout.'
@@ -431,6 +437,9 @@ def parse_args():
                         help='If set, we will save result sql in table per file instead of result file')
     result.add_argument('--date-prefix', dest='date_prefix', action='store_true', default=False,
                         help='If set, we will change table per filename to ${date}_${db}.${tb}.sql '
+                             'default: ${db}.${tb}_${date}.sql')
+    result.add_argument('--no-date', dest='no_date', action='store_true', default=False,
+                        help='If set, we will change table per filename to ${db}.${tb}.sql '
                              'default: ${db}.${tb}_${date}.sql')
     result.add_argument('-ma', '--minutes-ago', dest='minutes_ago', type=int, default=3,
                         help='When you use --stop-never, we only parse specify minutes ago of modify time of file.')

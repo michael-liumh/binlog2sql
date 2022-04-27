@@ -3,14 +3,37 @@
 # Author:           Michael Liu
 # Created on:       2022-04-21
 import argparse
+import logging
 import os
 import sys
 import re
 import uuid
+import colorlog
 from rich.progress import track
-parent_dir = '/'.join(os.path.dirname(os.path.abspath(__file__)).split(os.sep)[0:-1])
-sys.path.append(parent_dir)
-from binlog2sql_util import logger
+
+# create a logger
+logger = logging.getLogger('sort_binlog2sql_result_utils')
+logger.setLevel(logging.INFO)
+
+# set logger color
+log_colors_config = {
+    'DEBUG': 'bold_purple',
+    'INFO': 'bold_green',
+    'WARNING': 'bold_yellow',
+    'ERROR': 'bold_red',
+    'CRITICAL': 'red',
+}
+
+# set logger format
+console_format = colorlog.ColoredFormatter(
+    "[%(asctime)s] [%(module)s:%(funcName)s] [%(lineno)d] [%(levelname)s] %(log_color)s%(message)s",
+    log_colors=log_colors_config
+)
+
+# add console handler
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(console_format)
+logger.addHandler(console_handler)
 
 
 def parse_args():
@@ -54,6 +77,9 @@ def parse_command_line_args(args):
 
     if not os.path.isdir(args.tmp_dir):
         os.makedirs(args.tmp_dir, exist_ok=True)
+        while os.listdir(args.tmp_dir) != list():
+            args.tmp_dir = os.path.join(args.tmp_dir, 'tmp/')
+            os.makedirs(args.tmp_dir, exist_ok=True)
 
     if args.sort_type not in ['reverse_seq', 'sort_by_time']:
         logger.error(f'Invalid sort type: [{args.sort_type}]')
@@ -71,10 +97,13 @@ def yield_file(filename, encoding: str = 'utf8', chunk_size: int = 1000):
     with open(filename, 'r', encoding=encoding) as f:
         tmp_list = []
         for i, line in enumerate(f):
-            tmp_list.append(line)
-            if i != 0 and i % chunk_size == 0:
-                yield tmp_list
-                tmp_list = []
+            if chunk_size > 1:
+                tmp_list.append(line)
+                if i != 0 and i % chunk_size == 0:
+                    yield tmp_list
+                    tmp_list = []
+            else:
+                yield line
         else:
             if tmp_list:
                 yield tmp_list
@@ -114,18 +143,18 @@ def get_min_max_val(tmp_list: list):
 
 
 def get_file_line_count(filename):
-    logger.info('Getting file line count...')
+    logger.info(f'Getting line count of file {filename} ...')
     command = f'wc -l {filename} | awk ' + "'{print $1}'"
     return int(os.popen(command).read())
 
 
-def main(args):
-    total_part = get_file_line_count(args.src_file) // args.chunk_size
-    if args.sort_type == 'reverse_seq':
+def reversed_seq(src_file, chunk_size, tmp_dir, dst_file, encoding='utf8', delete_tmp_dir=True):
+    total_part = get_file_line_count(src_file) // chunk_size
+    try:
         record_list = []
-        for i, file_lines in track(enumerate(yield_file(args.src_file, args.encoding, args.chunk_size)),
-                                   total=total_part, description='sorting...'):
-            tmp_filepath = os.path.join(args.tmp_dir, str(uuid.uuid4()))
+        for i, file_lines in track(enumerate(yield_file(src_file, encoding, chunk_size)),
+                                   total=total_part, description='reversing...'):
+            tmp_filepath = os.path.join(tmp_dir, str(uuid.uuid4()))
             record_list.append([i, tmp_filepath])
 
             file_lines_tmp = []
@@ -133,35 +162,41 @@ def main(args):
                 file_lines_tmp.append([ii, line])
             file_lines_tmp.sort(key=sort_by_index, reverse=True)
             file_lines_new = [x[1] for x in file_lines_tmp]
-            save_to_file(tmp_filepath, file_lines_new, encoding=args.encoding)
+            save_to_file(tmp_filepath, file_lines_new, encoding=encoding)
 
         record_list.sort(key=sort_by_index, reverse=True)
         for i, (_, filepath) in track(enumerate(record_list), total=len(record_list), description='re-saving...'):
-            file_lines = read_file(filepath, args.encoding)
+            file_lines = read_file(filepath, encoding)
             if i == 0:
-                save_to_file(args.dst_file, file_lines, encoding=args.encoding, mode='w')
+                save_to_file(dst_file, file_lines, encoding=encoding, mode='w')
             else:
-                save_to_file(args.dst_file, file_lines, encoding=args.encoding, mode='a')
+                save_to_file(dst_file, file_lines, encoding=encoding, mode='a')
             os.remove(filepath)
+    finally:
+        if delete_tmp_dir:
+            os.popen(f'rm -rf {tmp_dir}')
 
-    elif args.sort_type == 'sort_by_time':
+
+def sort_file_by_time(src_file, chunk_size, tmp_dir, dst_file, encoding='utf8'):
+    try:
+        total_part = get_file_line_count(src_file) // chunk_size
         record_dict = dict()
-        for tmp_list in track(yield_file(args.src_file, args.encoding, args.chunk_size),
+        for tmp_list in track(yield_file(src_file, encoding, chunk_size),
                               total=total_part, description='sorting...'):
             # 获取最小值和最大值的时候，会排序
             min_val, max_val = get_min_max_val(tmp_list)
             if record_dict:
                 for _ in tmp_list.copy():
                     line = tmp_list.pop(0)
-                    tmp_result = sort_by_time(line)
+                    sql_time = sort_by_time(line)
                     break_sign = 0
 
                     # tmp_list 里的数据已经排好序了，如果轮询到某行匹配不到前面的最小值和最大值区间的话，
                     # 后面的就不需要再匹配了
                     for filename, (record_min_val, record_max_val) in record_dict.items():
-                        if record_min_val <= tmp_result <= record_max_val:
-                            filepath = os.path.join(args.tmp_dir, filename)
-                            save_to_file(filepath, line, args.encoding, 'a')
+                        if record_min_val <= sql_time <= record_max_val:
+                            filepath = os.path.join(tmp_dir, filename)
+                            save_to_file(filepath, line, encoding, 'a')
                             break
                     else:
                         break_sign = 1
@@ -174,8 +209,8 @@ def main(args):
             tmp_filename = str(uuid.uuid4())
             record_dict[tmp_filename] = [min_val, max_val]
 
-            tmp_filepath = os.path.join(args.tmp_dir, tmp_filename)
-            save_to_file(tmp_filepath, tmp_list, args.encoding)
+            tmp_filepath = os.path.join(tmp_dir, tmp_filename)
+            save_to_file(tmp_filepath, tmp_list, encoding)
 
         record_list = []
         for i, (filename, (record_min_val, _)) in enumerate(record_dict.items()):
@@ -183,14 +218,23 @@ def main(args):
         record_list.sort(key=sort_by_min_val)
 
         for i, (filename, _) in track(enumerate(record_list), total=len(record_list), description='re-saving...'):
-            filepath = os.path.join(args.tmp_dir, filename)
-            file_lines = read_file(filepath, args.encoding)
+            filepath = os.path.join(tmp_dir, filename)
+            file_lines = read_file(filepath, encoding)
             file_lines.sort(key=sort_by_time)
             if i == 0:
-                save_to_file(args.dst_file, file_lines, encoding=args.encoding, mode='w')
+                save_to_file(dst_file, file_lines, encoding=encoding, mode='w')
             else:
-                save_to_file(args.dst_file, file_lines, encoding=args.encoding, mode='a')
+                save_to_file(dst_file, file_lines, encoding=encoding, mode='a')
             os.remove(filepath)
+    finally:
+        os.popen(f'rm -rf {tmp_dir}')
+
+
+def main(args):
+    if args.sort_type == 'reverse_seq':
+        reversed_seq(args.src_file, args.chunk_size, args.tmp_dir, args.dst_file, args.encoding)
+    elif args.sort_type == 'sort_by_time':
+        sort_file_by_time(args.src_file, args.chunk_size, args.tmp_dir, args.dst_file, args.encoding)
 
 
 if __name__ == '__main__':

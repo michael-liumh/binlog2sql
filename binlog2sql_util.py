@@ -19,6 +19,8 @@ from pymysqlreplication.row_event import (
     UpdateRowsEvent,
     DeleteRowsEvent,
 )
+from rich.progress import track
+from utils.sort_binlog2sql_result_utils import reversed_seq, yield_file
 
 if sys.version > '3':
     PY3PLUS = True
@@ -28,8 +30,7 @@ else:
 # create a logger
 base_dir = os.path.dirname(os.path.abspath(__file__))
 sep = '/' if '/' in sys.argv[0] else os.sep
-py_file_pre = sys.argv[0].split(sep)[-1].split('.')[0]
-logger = logging.getLogger()
+logger = logging.getLogger('binlog2sql_utils')
 logger.setLevel(logging.INFO)
 
 # set logger color
@@ -43,7 +44,7 @@ log_colors_config = {
 
 # set logger format
 console_format = colorlog.ColoredFormatter(
-    "%(log_color)s[%(asctime)s] [%(module)s:%(funcName)s] [%(lineno)d] [%(levelname)s] %(message)s",
+    "[%(asctime)s] [%(module)s:%(funcName)s] [%(lineno)d] [%(levelname)s] %(log_color)s%(message)s",
     log_colors=log_colors_config
 )
 
@@ -170,12 +171,16 @@ def parse_args():
                        help='Only key primary key condition when sql type is UPDATE and DELETE')
     event.add_argument('-B', '--flashback', dest='flashback', action='store_true',
                        help='Flashback data to start_position of start_file', default=False)
-    event.add_argument('--back-interval', dest='back_interval', type=float, default=1.0,
-                       help="Sleep time between chunks of 1000 rollback sql. set it to 0 if do not need sleep")
     event.add_argument('--replace', dest='replace', action='store_true',
                        help='Use REPLACE INTO instead of INSERT INTO.', default=False)
     event.add_argument('--insert-ignore', dest='insert_ignore', action='store_true',
                        help='Insert rows with INSERT IGNORE.', default=False)
+
+    tmp = parser.add_argument_group('handle tmp options')
+    tmp.add_argument('--tmp-dir', dest='tmp_dir', type=str, default='tmp',
+                     help="Dir for handle tmp file")
+    tmp.add_argument('--chunk', dest='chunk', type=int, default=1000,
+                     help="Handle chunks of rollback sql from tmp file")
 
     result = parser.add_argument_group('result filter')
     result.add_argument('--need-comment', dest='need_comment', type=int, default=1,
@@ -200,6 +205,9 @@ def parse_args():
                         help='If set, we will save result sql in table per file instead of result file')
     result.add_argument('--date-prefix', dest='date_prefix', action='store_true', default=False,
                         help='If set, we will change table per filename to ${date}_${db}.${tb}.sql '
+                             'default: ${db}.${tb}_${date}.sql')
+    result.add_argument('--no-date', dest='no_date', action='store_true', default=False,
+                        help='If set, we will change table per filename to ${db}.${tb}.sql '
                              'default: ${db}.${tb}_${date}.sql')
     return parser
 
@@ -235,8 +243,9 @@ def command_line_args(args):
     else:
         args.password = args.password[0]
 
-    if args.result_file and not os.path.exists(args.result_dir):
+    if args.result_dir != './' and not os.path.exists(args.result_dir):
         os.makedirs(args.result_dir, exist_ok=True)
+
     args.result_file = os.path.join(args.result_dir, args.result_file.split(sep)[-1]) if args.result_file else \
         args.result_file
     return args
@@ -610,7 +619,8 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                         ' AND '.join(map(compare_items, row['before_values'].items()))
                     )
                     values = map(fix_object, list(row['after_values'].values()) + list(row['before_values'].values()))
-                    types = map(fix_object_new, list(row['after_values'].values()) + list(row['before_values'].values()))
+                    types = map(fix_object_new,
+                                list(row['after_values'].values()) + list(row['before_values'].values()))
                 else:
                     pk_item = {
                         binlog_event.primary_key: row['before_values'].get(binlog_event.primary_key)
@@ -638,37 +648,6 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
     if return_type:
         return result, list(types)
     return result
-
-
-def reversed_lines(fin):
-    """Generate the lines of file in reverse order."""
-    part = ''
-    for block in reversed_blocks(fin):
-        if PY3PLUS:
-            # block = block.decode("utf-8")
-            block = fix_object(block)
-        for c in reversed(block):
-            if c == '\n' and part:
-                yield part[::-1]
-                part = ''
-            part += c
-    if part:
-        yield part[::-1]
-
-
-def reversed_blocks(fin, block_size=4096):
-    """Generate blocks of file's contents in reverse order."""
-    # 调到文件末尾
-    fin.seek(0, os.SEEK_END)
-    # 获取文件末尾的流位置
-    here = fin.tell()
-    # 如果文件非空
-    while 0 < here:
-        # 一次取固定大小的文件信息
-        delta = min(block_size, here)
-        here -= delta
-        fin.seek(here, os.SEEK_SET)
-        yield fin.read(delta)
 
 
 def get_gtid_set(include_gtids, exclude_gtids):
@@ -739,3 +718,55 @@ def dt_now(datetime_format: str = None) -> str:
         datetime_format = '%Y%m%d'
 
     return datetime.datetime.now().strftime(datetime_format)
+
+
+def get_table_name(sql):
+    table_name = ''
+    if sql.strip().upper().startswith('DELETE'):
+        from_idx = sql.find('FROM')
+        where_idx = sql.find('WHERE')
+        table_name = sql[from_idx + 4: where_idx].strip().replace('`', '')
+    elif sql.strip().upper().startswith('UPDATE'):
+        update_idx = sql.find('UPDATE')
+        set_idx = sql.find('SET')
+        table_name = sql[update_idx + 6: set_idx].strip().replace('`', '')
+    elif sql.strip().upper().startswith('INSERT'):
+        insert_idx = sql.find('INSERT INTO')
+        values_idx = sql.find('`(`')
+        table_name = sql[insert_idx + 11: values_idx].strip().replace('`', '')
+    return table_name
+
+
+def handle_rollback_sql(f_result_sql_file, table_per_file, date_prefix, no_date, result_dir,
+                        src_file, chunk_size, tmp_dir, result_file):
+
+    if f_result_sql_file:
+        reversed_seq(src_file, chunk_size, tmp_dir, result_file, delete_tmp_dir=False)
+    else:
+        tmp_file = src_file + '_tmp'
+        try:
+            reversed_seq(src_file, chunk_size, tmp_dir, tmp_file, delete_tmp_dir=False)
+            logger.info('handling...')
+            for line in yield_file(tmp_file, chunk_size=1):
+                if table_per_file:
+                    table_name = get_table_name(line)
+                    if table_name:
+                        if date_prefix:
+                            filename = f'{dt_now()}.{table_name}.sql'
+                        elif no_date:
+                            filename = f'{table_name}.sql'
+                        else:
+                            filename = f'{table_name}.{dt_now()}.sql'
+                    else:
+                        if date_prefix:
+                            filename = f'{dt_now()}.others.sql'
+                        elif no_date:
+                            filename = f'others.sql'
+                        else:
+                            filename = f'others.{dt_now()}.sql'
+                    result_sql_file = os.path.join(result_dir, filename)
+                    save_result_sql(result_sql_file, line)
+                else:
+                    print(line, end='')
+        finally:
+            os.remove(tmp_file)

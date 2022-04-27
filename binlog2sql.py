@@ -8,7 +8,8 @@ import os
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent, GtidEvent
 from binlog2sql_util import command_line_args, concat_sql_from_binlog_event, is_dml_event, event_type, logger, \
-    set_log_format, get_gtid_set, is_want_gtid, save_result_sql, dt_now
+    set_log_format, get_gtid_set, is_want_gtid, save_result_sql, dt_now, create_unique_file, temp_open, \
+    handle_rollback_sql
 
 sep = '/' if '/' in sys.argv[0] else os.sep
 
@@ -17,11 +18,12 @@ class Binlog2sql(object):
 
     def __init__(self, connection_settings, start_file=None, start_pos=None, end_file=None, end_pos=None,
                  start_time=None, stop_time=None, only_schemas=None, only_tables=None, no_pk=False,
-                 flashback=False, stop_never=False, back_interval=1.0, only_dml=True, sql_type=None,
+                 flashback=False, stop_never=False, only_dml=True, sql_type=None,
                  need_comment=1, rename_db=None, only_pk=False, ignore_databases=None, ignore_tables=None,
                  ignore_columns=None, replace=False, insert_ignore=False, remove_not_update_col=False,
                  result_file=None, result_dir=None, table_per_file=False, date_prefix=False,
-                 include_gtids=None, exclude_gtids=None, update_to_replace=False, keep_not_update_col: list = None):
+                 include_gtids=None, exclude_gtids=None, update_to_replace=False, keep_not_update_col: list = None,
+                 chunk_size=1000, tmp_dir='tmp', no_date=False):
         """
         conn_setting: {'host': 127.0.0.1, 'port': 3306, 'user': user, 'passwd': passwd, 'charset': 'utf8'}
         """
@@ -45,7 +47,7 @@ class Binlog2sql(object):
 
         self.only_schemas = only_schemas if only_schemas else None
         self.only_tables = only_tables if only_tables else None
-        self.no_pk, self.flashback, self.stop_never, self.back_interval = (no_pk, flashback, stop_never, back_interval)
+        self.no_pk, self.flashback, self.stop_never = (no_pk, flashback, stop_never)
         self.only_dml = only_dml
         self.sql_type = [t.upper() for t in sql_type] if sql_type else []
 
@@ -67,6 +69,11 @@ class Binlog2sql(object):
         self.gtid_set = get_gtid_set(include_gtids, exclude_gtids)
         self.update_to_replace = update_to_replace
         self.keep_not_update_col = keep_not_update_col
+        self.no_date = no_date
+        self.f_result_sql_file = ''
+        self.chunk_size = chunk_size
+        self.tmp_dir = tmp_dir
+        self.init_tmp_dir()
 
         with self.connection as cursor:
             cursor.execute("SHOW MASTER STATUS")
@@ -85,18 +92,22 @@ class Binlog2sql(object):
             if not self.server_id:
                 raise ValueError('missing server_id in %s:%s' % (self.conn_setting['host'], self.conn_setting['port']))
 
+    def init_tmp_dir(self):
+        os.makedirs(self.tmp_dir, exist_ok=True)
+        while os.listdir(self.tmp_dir) != list():
+            self.tmp_dir = os.path.join(self.tmp_dir, 'tmp')
+            os.makedirs(self.tmp_dir, exist_ok=True)
+
     def process_binlog(self):
         stream = BinLogStreamReader(connection_settings=self.conn_setting, server_id=self.server_id,
                                     log_file=self.start_file, log_pos=self.start_pos, only_schemas=self.only_schemas,
                                     only_tables=self.only_tables, resume_stream=True, blocking=True,
                                     ignored_schemas=self.ignore_databases, ignored_tables=self.ignore_tables)
-
-        f_result_sql_file = ''
         mode = 'w'
         if self.result_file:
             result_sql_file = self.result_file
             logger.info(f'Saving result into file: [{result_sql_file}]')
-            f_result_sql_file = open(result_sql_file, mode)
+            self.f_result_sql_file = open(result_sql_file, mode)
         elif self.table_per_file:
             logger.info(f'Saving table per file into dir: [{self.result_dir}]')
 
@@ -104,7 +115,9 @@ class Binlog2sql(object):
         gtid_set = True if self.gtid_set else False
         flag_last_event = False
         e_start_pos, last_pos = stream.log_pos, stream.log_pos
-        with self.connection as cursor:
+        tmp_file = create_unique_file('%s.%s' % (self.conn_setting['host'], self.conn_setting['port']))
+        tmp_file = os.path.join(self.tmp_dir, tmp_file)
+        with temp_open(tmp_file, "w") as f_tmp, self.connection as cursor:
             for binlog_event in stream:
                 # 返回的 EVENT 顺序
                 # RotateEvent
@@ -163,24 +176,30 @@ class Binlog2sql(object):
                         if self.need_comment != 1:
                             sql = re.sub('; #.*', ';', sql)
 
-                        if f_result_sql_file:
-                            f_result_sql_file.write(sql + '\n')
-                        elif self.table_per_file and db and table:
-                            if self.date_prefix:
-                                filename = f'{dt_now()}.' + db + '.' + table + '.sql'
+                        if not self.flashback:
+                            if self.f_result_sql_file:
+                                self.f_result_sql_file.write(sql + '\n')
+                            elif self.table_per_file:
+                                if db and table:
+                                    if self.date_prefix:
+                                        filename = f'{dt_now()}.' + db + '.' + table + '.sql'
+                                    elif self.no_date:
+                                        filename = db + '.' + table + '.sql'
+                                    else:
+                                        filename = db + '.' + table + f'.{dt_now()}.sql'
+                                else:
+                                    if self.date_prefix:
+                                        filename = f'{dt_now()}.others.sql'
+                                    elif self.no_date:
+                                        filename = f'others.sql'
+                                    else:
+                                        filename = f'others.{dt_now()}.sql'
+                                result_sql_file = os.path.join(self.result_dir, filename)
+                                save_result_sql(result_sql_file, sql + '\n')
                             else:
-                                filename = db + '.' + table + f'.{dt_now()}.sql'
-                            result_sql_file = os.path.join(self.result_dir, filename)
-                            save_result_sql(result_sql_file, sql + '\n')
-                        elif self.table_per_file:
-                            if self.date_prefix:
-                                filename = f'{dt_now()}.others.sql'
-                            else:
-                                filename = f'others.{dt_now()}.sql'
-                            result_sql_file = os.path.join(self.result_dir, filename)
-                            save_result_sql(result_sql_file, sql + '\n')
+                                print(sql)
                         else:
-                            print(sql)
+                            f_tmp.write(sql + '\n')
                 elif is_dml_event(binlog_event) and event_type(binlog_event) in self.sql_type:
                     for row in binlog_event.rows:
                         if binlog_gtid and gtid_set and not is_want_gtid(self.gtid_set, binlog_gtid):
@@ -199,24 +218,30 @@ class Binlog2sql(object):
                                 if self.need_comment != 1:
                                     sql = re.sub('; #.*', ';', sql)
 
-                                if f_result_sql_file:
-                                    f_result_sql_file.write(sql + '\n')
-                                elif self.table_per_file and db and table:
-                                    if self.date_prefix:
-                                        filename = f'{dt_now()}.' + db + '.' + table + '.sql'
+                                if not self.flashback:
+                                    if self.f_result_sql_file:
+                                        self.f_result_sql_file.write(sql + '\n')
+                                    elif self.table_per_file:
+                                        if db and table:
+                                            if self.date_prefix:
+                                                filename = f'{dt_now()}.' + db + '.' + table + '.sql'
+                                            elif self.no_date:
+                                                filename = db + '.' + table + '.sql'
+                                            else:
+                                                filename = db + '.' + table + f'.{dt_now()}.sql'
+                                        else:
+                                            if self.date_prefix:
+                                                filename = f'{dt_now()}.others.sql'
+                                            elif self.no_date:
+                                                filename = f'others.sql'
+                                            else:
+                                                filename = f'others.{dt_now()}.sql'
+                                        result_sql_file = os.path.join(self.result_dir, filename)
+                                        save_result_sql(result_sql_file, sql + '\n')
                                     else:
-                                        filename = db + '.' + table + f'.{dt_now()}.sql'
-                                    result_sql_file = os.path.join(self.result_dir, filename)
-                                    save_result_sql(result_sql_file, sql + '\n')
-                                elif self.table_per_file:
-                                    if self.date_prefix:
-                                        filename = f'{dt_now()}.others.sql'
-                                    else:
-                                        filename = f'others.{dt_now()}.sql'
-                                    result_sql_file = os.path.join(self.result_dir, filename)
-                                    save_result_sql(result_sql_file, sql + '\n')
+                                        print(sql)
                                 else:
-                                    print(sql)
+                                    f_tmp.write(sql + '\n')
                         except Exception:
                             logger.exception('')
                             logger.error('Error sql: %s' % sql)
@@ -228,6 +253,14 @@ class Binlog2sql(object):
                     break
 
             stream.close()
+            f_tmp.close()
+            if self.f_result_sql_file:
+                self.f_result_sql_file.close()
+
+            if self.flashback:
+                handle_rollback_sql(self.f_result_sql_file, self.table_per_file, self.date_prefix, self.no_date,
+                                    self.result_dir, tmp_file, self.chunk_size, self.tmp_dir, self.result_file)
+        os.popen(f'rm -rf {self.tmp_dir}')
         return True
 
     def __del__(self):
@@ -248,14 +281,14 @@ def main(args):
         end_file=args.end_file, end_pos=args.end_pos, start_time=args.start_time,
         stop_time=args.stop_time, only_schemas=args.databases, only_tables=args.tables,
         no_pk=args.no_pk, flashback=args.flashback, stop_never=args.stop_never,
-        back_interval=args.back_interval, only_dml=args.only_dml, sql_type=args.sql_type,
+        only_dml=args.only_dml, sql_type=args.sql_type, no_date=args.no_date,
         need_comment=args.need_comment, rename_db=args.rename_db, only_pk=args.only_pk,
         ignore_databases=args.ignore_databases, ignore_tables=args.ignore_tables,
         ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore,
         remove_not_update_col=args.remove_not_update_col, table_per_file=args.table_per_file,
         result_file=args.result_file, result_dir=args.result_dir, date_prefix=args.date_prefix,
         include_gtids=args.include_gtids, exclude_gtids=args.exclude_gtids, update_to_replace=args.update_to_replace,
-        keep_not_update_col=args.keep_not_update_col
+        keep_not_update_col=args.keep_not_update_col, chunk_size=args.chunk, tmp_dir=args.tmp_dir
     )
     binlog2sql.process_binlog()
 
