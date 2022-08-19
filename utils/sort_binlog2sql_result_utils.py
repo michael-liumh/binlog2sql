@@ -157,6 +157,10 @@ def get_file_line_count(filename):
 
 def reversed_seq(src_file, chunk_size, tmp_dir, dst_file, encoding='utf8', delete_tmp_dir=True):
     total_part = get_file_line_count(src_file) // chunk_size
+    if total_part == 0:
+        logger.error(f'{src_file} is empty.')
+        return
+
     try:
         record_list = []
         for i, file_lines in track(enumerate(yield_file(src_file, encoding, chunk_size)),

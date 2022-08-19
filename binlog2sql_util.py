@@ -746,27 +746,31 @@ def handle_rollback_sql(f_result_sql_file, table_per_file, date_prefix, no_date,
         tmp_file = src_file + '_tmp'
         try:
             reversed_seq(src_file, chunk_size, tmp_dir, tmp_file, delete_tmp_dir=False)
-            logger.info('handling...')
-            for line in yield_file(tmp_file, chunk_size=1):
-                if table_per_file:
-                    table_name = get_table_name(line)
-                    if table_name:
-                        if date_prefix:
-                            filename = f'{dt_now()}.{table_name}.sql'
-                        elif no_date:
-                            filename = f'{table_name}.sql'
+            if os.path.exists(tmp_file):
+                logger.info('handling...')
+                for line in yield_file(tmp_file, chunk_size=1):
+                    if table_per_file:
+                        table_name = get_table_name(line)
+                        if table_name:
+                            if date_prefix:
+                                filename = f'{dt_now()}.{table_name}.sql'
+                            elif no_date:
+                                filename = f'{table_name}.sql'
+                            else:
+                                filename = f'{table_name}.{dt_now()}.sql'
                         else:
-                            filename = f'{table_name}.{dt_now()}.sql'
+                            if date_prefix:
+                                filename = f'{dt_now()}.others.sql'
+                            elif no_date:
+                                filename = f'others.sql'
+                            else:
+                                filename = f'others.{dt_now()}.sql'
+                        result_sql_file = os.path.join(result_dir, filename)
+                        save_result_sql(result_sql_file, line)
                     else:
-                        if date_prefix:
-                            filename = f'{dt_now()}.others.sql'
-                        elif no_date:
-                            filename = f'others.sql'
-                        else:
-                            filename = f'others.{dt_now()}.sql'
-                    result_sql_file = os.path.join(result_dir, filename)
-                    save_result_sql(result_sql_file, line)
-                else:
-                    print(line, end='')
+                        print(line, end='')
+            else:
+                logger.error('binlog 解析无结果')
         finally:
-            os.remove(tmp_file)
+            if os.path.exists(tmp_file):
+                os.remove(tmp_file)
