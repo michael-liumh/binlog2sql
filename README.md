@@ -12,6 +12,11 @@ pip3 install -r requirements.txt
 git与pip的安装问题请自行搜索解决。
 推荐使用 pypy3 运行，效率会比 python3 高
 
+注意事项
+==============
+* 使用 binlogfile2sql 解析本地 binlog，也是需要连接数据库的，因为 binlog 里面存储的是 table_id，而不是 table_name，所以需要连接数据库将 table_id 转换成 table_name，database_name、column_name 也是同理。
+* binlogfile2sql 连接的数据库实例，里面只需要有表结构即可，不需要有实际的数据，所以可以单独启动一个空实例，导入表结构即可使用。
+
 修改
 ==============
 * 添加日志模块
