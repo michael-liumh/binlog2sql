@@ -458,8 +458,7 @@ def parse_args():
 
     binlog_file_filter = parser.add_argument_group('binlog file filter')
     binlog_file_filter.add_argument('-f', '--file-path', dest='file_path', type=str, nargs='*',
-                                    help='Binlog file path. Please give us absolute path'
-                                         'you can also use with binlog file dir by filename.', default=[])
+                                    help='Binlog file path.', default=[])
     binlog_file_filter.add_argument('-fd', '--file-dir', dest='file_dir', type=str,
                                     help='Binlog file dir. Please give us absolute path', default='')
     binlog_file_filter.add_argument('-fr', '--file-regex', dest='file_regex', type=str,
@@ -557,12 +556,7 @@ def get_binlog_file_list(args):
                     continue
                 binlog_file_list.append(binlog_file)
     else:
-        for f in args.file_path:
-            if not f.startswith('/') and args.file_dir:
-                binlog_file = os.path.join(args.file_dir, f)
-            else:
-                binlog_file = f
-            binlog_file_list.append(binlog_file)
+        binlog_file_list.extend(args.file_path)
 
     for f in executed_file_list.copy():
         if not os.path.exists(f):
