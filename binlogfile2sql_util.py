@@ -558,12 +558,11 @@ def get_binlog_file_list(args):
                 binlog_file_list.append(binlog_file)
     else:
         for f in args.file_path:
-            if re.search(args.file_regex, f) is not None:
-                if not f.startswith('/') and args.file_dir:
-                    binlog_file = os.path.join(args.file_dir, f)
-                else:
-                    binlog_file = f
-                binlog_file_list.append(binlog_file)
+            if not f.startswith('/') and args.file_dir:
+                binlog_file = os.path.join(args.file_dir, f)
+            else:
+                binlog_file = f
+            binlog_file_list.append(binlog_file)
 
     for f in executed_file_list.copy():
         if not os.path.exists(f):
