@@ -107,7 +107,8 @@ def temp_open(filename, mode):
         yield f
     finally:
         f.close()
-        os.remove(filename)
+        if os.path.exists(filename):
+            os.remove(filename)
 
 
 def parse_args():

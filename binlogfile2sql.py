@@ -77,10 +77,12 @@ class BinlogFile2sql(object):
         self.init_tmp_dir()
 
     def init_tmp_dir(self):
-        os.makedirs(self.tmp_dir, exist_ok=True)
+        if not os.path.exists(self.tmp_dir):
+            os.makedirs(self.tmp_dir, exist_ok=True)
         while not check_dir_if_empty(self.tmp_dir):
             self.tmp_dir = os.path.join(self.tmp_dir, 'tmp')
-            os.makedirs(self.tmp_dir, exist_ok=True)
+            if not os.path.exists(self.tmp_dir):
+                os.makedirs(self.tmp_dir, exist_ok=True)
 
     def process_binlog(self):
         stream = BinLogFileReader(self.file_path, ctl_connection_settings=self.connection_settings,
@@ -110,6 +112,9 @@ class BinlogFile2sql(object):
         e_start_pos, last_pos = stream.log_pos, stream.log_pos
         tmp_file = create_unique_file('%s.%s' % (self.connection_settings['host'], self.connection_settings['port']))
         tmp_file = os.path.join(self.tmp_dir, tmp_file)
+        if not os.path.exists(self.tmp_dir):
+            os.makedirs(self.tmp_dir, exist_ok=True)
+
         with temp_open(tmp_file, "w") as f_tmp, self.connection as cursor:
             for binlog_event in stream:
                 if not self.stop_never:
@@ -270,7 +275,7 @@ def main(args):
                 ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore,
                 ignore_virtual_columns=args.ignore_virtual_columns, date_prefix=args.date_prefix,
                 remove_not_update_col=args.remove_not_update_col, no_date=args.no_date,
-                include_gtids=args.include_gtids, exclude_gtids=args.exclude_gtids,
+                include_gtids=args.include_gtids, exclude_gtids=args.exclude_gtids, tmp_dir=args.tmp_dir,
                 update_to_replace=args.update_to_replace, keep_not_update_col=args.keep_not_update_col
             )
             r = bin2sql.process_binlog()
