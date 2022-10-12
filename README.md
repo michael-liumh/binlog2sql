@@ -92,6 +92,7 @@ git与pip的安装问题请自行搜索解决。
 | --stop-file | 通过字符串比较的方式，指定选择的目录下的结束的 binlog 文件 |
 | --check | 检查指定目录下被过滤的 binlog 文件是否符合预期 |
 | --supervisor | 用 supervisor 管理后台解析进程 |
+| --where | 根据指定条件过滤出需要的 SQL，支持同时传入多个条件，但不能将多个条件用一个括号包起来，多个条件直接传入多个参数即可。正确示例：--where 'c1=v1' 'c2=v2'；错误示例：--where 'c1=v1 and c2=v2'；单个条件支持使用 or，如：--where 'deleted_at = 0 or deleted_at is null' |
 
 测试
 ==============

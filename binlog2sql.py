@@ -9,7 +9,7 @@ from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent, GtidEvent
 from binlog2sql_util import command_line_args, concat_sql_from_binlog_event, is_dml_event, event_type, logger, \
     set_log_format, get_gtid_set, is_want_gtid, save_result_sql, dt_now, create_unique_file, temp_open, \
-    handle_rollback_sql
+    handle_rollback_sql, split_condition
 from utils.sort_binlog2sql_result_utils import check_dir_if_empty
 
 sep = '/' if '/' in sys.argv[0] else os.sep
@@ -24,7 +24,7 @@ class Binlog2sql(object):
                  ignore_columns=None, replace=False, insert_ignore=False, remove_not_update_col=False,
                  result_file=None, result_dir=None, table_per_file=False, date_prefix=False,
                  include_gtids=None, exclude_gtids=None, update_to_replace=False, keep_not_update_col: list = None,
-                 chunk_size=1000, tmp_dir='tmp', no_date=False):
+                 chunk_size=1000, tmp_dir='tmp', no_date=False, where=None):
         """
         conn_setting: {'host': 127.0.0.1, 'port': 3306, 'user': user, 'passwd': passwd, 'charset': 'utf8'}
         """
@@ -75,6 +75,7 @@ class Binlog2sql(object):
         self.chunk_size = chunk_size
         self.tmp_dir = tmp_dir
         self.init_tmp_dir()
+        self.filter_conditions = split_condition(where) if where is not None else []
 
         with self.connection as cursor:
             cursor.execute("SHOW MASTER STATUS")
@@ -171,7 +172,8 @@ class Binlog2sql(object):
                         flashback=self.flashback, no_pk=self.no_pk, rename_db=self.rename_db, only_pk=self.only_pk,
                         ignore_columns=self.ignore_columns, replace=self.replace, insert_ignore=self.insert_ignore,
                         remove_not_update_col=self.remove_not_update_col, binlog_gtid=binlog_gtid,
-                        update_to_replace=self.update_to_replace, keep_not_update_col=self.keep_not_update_col
+                        update_to_replace=self.update_to_replace, keep_not_update_col=self.keep_not_update_col,
+                        filter_conditions=self.filter_conditions,
                     )
                     if sql:
                         if self.need_comment != 1:
@@ -212,7 +214,7 @@ class Binlog2sql(object):
                             only_pk=self.only_pk, ignore_columns=self.ignore_columns, replace=self.replace,
                             insert_ignore=self.insert_ignore, remove_not_update_col=self.remove_not_update_col,
                             only_return_sql=False, binlog_gtid=binlog_gtid, update_to_replace=self.update_to_replace,
-                            keep_not_update_col=self.keep_not_update_col
+                            keep_not_update_col=self.keep_not_update_col, filter_conditions=self.filter_conditions,
                         )
                         try:
                             if sql:
@@ -289,7 +291,7 @@ def main(args):
         remove_not_update_col=args.remove_not_update_col, table_per_file=args.table_per_file,
         result_file=args.result_file, result_dir=args.result_dir, date_prefix=args.date_prefix,
         include_gtids=args.include_gtids, exclude_gtids=args.exclude_gtids, update_to_replace=args.update_to_replace,
-        keep_not_update_col=args.keep_not_update_col, chunk_size=args.chunk, tmp_dir=args.tmp_dir
+        keep_not_update_col=args.keep_not_update_col, chunk_size=args.chunk, tmp_dir=args.tmp_dir, where=args.where,
     )
     binlog2sql.process_binlog()
 

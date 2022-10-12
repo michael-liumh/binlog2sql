@@ -9,7 +9,7 @@ import getpass
 import sys
 from datetime import datetime as dt
 from pymysql.cursors import DictCursor
-from binlog2sql_util import is_valid_datetime, logger, sep
+from binlog2sql_util import is_valid_datetime, logger, sep, extend_parser
 from pymysqlreplication.packet import BinLogPacketWrapper
 from pymysqlreplication.constants.BINLOG import TABLE_MAP_EVENT, ROTATE_EVENT
 from pymysqlreplication.event import (
@@ -343,118 +343,10 @@ class EventSizeTooSmallError(Exception):
 
 def parse_args():
     """parse args for binlog2sql"""
-    parser = argparse.ArgumentParser(description='Parse MySQL binlog to SQL you want', add_help=False,
+    parser = argparse.ArgumentParser(description='Parse MySQL binlog file to SQL you want', add_help=False,
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--help', dest='help', action='store_true', help='help information', default=False)
-
-    connect_setting = parser.add_argument_group('connect setting')
-    connect_setting.add_argument('-h', '--host', dest='host', type=str,
-                                 help='Host the MySQL database server located', default='127.0.0.1')
-    connect_setting.add_argument('-u', '--user', dest='user', type=str,
-                                 help='MySQL Username to log in as', default='root')
-    connect_setting.add_argument('-p', '--password', dest='password', type=str, nargs='*',
-                                 help='MySQL Password to use', default='')
-    connect_setting.add_argument('-P', '--port', dest='port', type=int,
-                                 help='MySQL port to use', default=3306)
-
-    schema = parser.add_argument_group('schema filter')
-    schema.add_argument('-d', '--databases', dest='databases', type=str, nargs='*',
-                        help='dbs you want to process', default='')
-    schema.add_argument('-t', '--tables', dest='tables', type=str, nargs='*',
-                        help='tables you want to process', default='')
-    schema.add_argument('-id', '--ignore-databases', dest='ignore_databases', type=str, nargs='*',
-                        help='dbs you want to process', default='')
-    schema.add_argument('-it', '--ignore-tables', dest='ignore_tables', type=str, nargs='*',
-                        help='tables you want to ignore', default='')
-    schema.add_argument('-ic', '--ignore-columns', dest='ignore_columns', type=str, nargs='*',
-                        help='columns you want to ignore', default='')
-    schema.add_argument('--ignore-virtual-columns', dest='ignore_virtual_columns', action='store_true',
-                        help='Ignore virtual columns', default=False)
-
-    interval = parser.add_argument_group('interval filter')
-    interval.add_argument('--start-position', '--start-pos', dest='start_pos', type=int,
-                          help='Start position of the --start-file', default=4)
-    interval.add_argument('--stop-position', '--end-pos', dest='end_pos', type=int,
-                          help="Stop position of --stop-file. default: latest position of '--stop-file'", default=0)
-    interval.add_argument('--start-datetime', dest='start_time', type=str,
-                          help="Start reading the binlog at first event having a datetime equal or posterior to "
-                               "the argument; the argument must be a date and time in the local time zone, "
-                               "in any format accepted by the MySQL server for DATETIME and TIMESTAMP types, "
-                               "for example: 2004-12-25 11:25:56 (you should probably use quotes for your shell "
-                               "to set it properly).",
-                          default='')
-    interval.add_argument('--stop-datetime', dest='stop_time', type=str,
-                          help="Stop reading the binlog at first event having a datetime equal or posterior to "
-                               "the argument; the argument must be a date and time in the local time zone, "
-                               "in any format accepted by the MySQL server for DATETIME and TIMESTAMP types, "
-                               "for example: 2004-12-25 11:25:56 (you should probably use quotes for your shell "
-                               "to set it properly).",
-                          default='')
-    interval.add_argument('--include-gtids', dest='include_gtids', type=str,
-                          help="Include Gtids. format @server_uuid:1-10[:20-30][:...]", default='')
-    interval.add_argument('--exclude-gtids', dest='exclude_gtids', type=str,
-                          help="Exclude Gtids. format @server_uuid:1-10[:20-30][:...]", default='')
-
-    type_filter = parser.add_argument_group('type filter')
-    type_filter.add_argument('--only-dml', dest='only_dml', action='store_true', default=False,
-                             help='only print dml, ignore ddl')
-    type_filter.add_argument('--sql-type', dest='sql_type', type=str, nargs='*', default=['INSERT', 'UPDATE', 'DELETE'],
-                             help='Sql type you want to process, support INSERT, UPDATE, DELETE.')
-
-    event = parser.add_argument_group('event filter')
-    event.add_argument('--stop-never', dest='stop_never', action='store_true', default=False,
-                       help='Wait for more data from the server. default: stop replicate at the last binlog '
-                            'when you start binlog2sql')
-    event.add_argument('-K', '--no-primary-key', dest='no_pk', action='store_true',
-                       help='Generate insert sql without primary key if exists', default=False)
-    event.add_argument('-KK', '--only-primary-key', dest='only_pk', action='store_true', default=False,
-                       help='Only key primary key condition when sql type is UPDATE and DELETE')
-    event.add_argument('-B', '--flashback', dest='flashback', action='store_true',
-                       help='Flashback data to start_position of start_file', default=False)
-    event.add_argument('--replace', dest='replace', action='store_true',
-                       help='Use REPLACE INTO instead of INSERT INTO.', default=False)
-    event.add_argument('--insert-ignore', dest='insert_ignore', action='store_true',
-                       help='Insert rows with INSERT IGNORE.', default=False)
-
-    tmp = parser.add_argument_group('handle tmp options')
-    tmp.add_argument('--tmp-dir', dest='tmp_dir', type=str, default='tmp',
-                     help="Dir for handle tmp file")
-    tmp.add_argument('--chunk', dest='chunk', type=int, default=1000,
-                     help="Handle chunks of rollback sql from tmp file")
-
-    result = parser.add_argument_group('result filter')
-    result.add_argument('--result-file', dest='result_file', type=str,
-                        help='If set, we will save result sql in this file instead print into stdout.'
-                             '(Tip: we will ignore path if give a result file with relative path or absolute path,'
-                             'please use --result-dir to set path)')
-    result.add_argument('--record-file', dest='record_file', type=str, default='executed_records.txt',
-                        help='When you use --stop-never, we will save executed record in this file'
-                             '(Tip: we will ignore path if give a record file with relative path or absolute path,'
-                             'please use --result-dir to set path)')
-    result.add_argument('--result-dir', dest='result_dir', type=str, default='./',
-                        help='Give a dir to save record_file and result_file in result dir.')
-    result.add_argument('--table-per-file', dest='table_per_file', action='store_true', default=False,
-                        help='If set, we will save result sql in table per file instead of result file')
-    result.add_argument('--date-prefix', dest='date_prefix', action='store_true', default=False,
-                        help='If set, we will change table per filename to ${date}_${db}.${tb}.sql '
-                             'default: ${db}.${tb}_${date}.sql')
-    result.add_argument('--no-date', dest='no_date', action='store_true', default=False,
-                        help='If set, we will change table per filename to ${db}.${tb}.sql '
-                             'default: ${db}.${tb}_${date}.sql')
-    result.add_argument('-ma', '--minutes-ago', dest='minutes_ago', type=int, default=3,
-                        help='When you use --stop-never, we only parse specify minutes ago of modify time of file.')
-    result.add_argument('--need-comment', dest='need_comment', type=int, default=1,
-                        help='Choice need comment like [#start 268435860 end 268436724 time 2021-12-01 16:40:16] '
-                             'or not, 0 means not need, 1 means need')
-    result.add_argument('--rename-db', dest='rename_db', type=str,
-                        help='Rename source dbs to one db.')
-    result.add_argument('--remove-not-update-col', dest='remove_not_update_col', action='store_true', default=False,
-                        help='If set, we will remove not update column in update statements (exclude primary key)')
-    result.add_argument('--keep', '--keep-not-update-col', dest='keep_not_update_col', type=str, nargs='*',
-                        help="If set --remove-not-update-col and --keep-not-update-col, "
-                             "we won't remove some col if you want to keep")
-    result.add_argument('--update-to-replace', dest='update_to_replace', action='store_true', default=False,
-                        help='If set, we will change update statement to replace statement.')
+    extend_parser(parser, True)
 
     binlog_file_filter = parser.add_argument_group('binlog file filter')
     binlog_file_filter.add_argument('-f', '--file-path', dest='file_path', type=str, nargs='*',
@@ -474,6 +366,14 @@ def parse_args():
     binlog_file_filter.add_argument('--supervisor', dest='supervisor', action='store_true',
                                     help="When use supervisor manage binlogfile2sql process, we won't exit "
                                          "if no file select", default=False)
+    binlog_file_filter.add_argument('--record-file', dest='record_file', type=str, default='executed_records.txt',
+                                    help='When you use --stop-never, we will save executed record in this file'
+                                         '(Tip: we will ignore path if give a record file with relative path '
+                                         'or absolute path, please use --result-dir to set path)')
+    binlog_file_filter.add_argument('-ma', '--minutes-ago', dest='minutes_ago', type=int, default=3,
+                                    help='When you use --stop-never, we only parse specify minutes ago of '
+                                         'modify time of file.')
+
     return parser
 
 

@@ -19,8 +19,8 @@ from pymysqlreplication.row_event import (
     UpdateRowsEvent,
     DeleteRowsEvent,
 )
-from rich.progress import track
 from utils.sort_binlog2sql_result_utils import reversed_seq, yield_file
+from utils.json_utils import fix_json_col
 
 if sys.version > '3':
     PY3PLUS = True
@@ -117,7 +117,11 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Parse MySQL binlog to SQL you want', add_help=False,
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--help', dest='help', action='store_true', help='help information', default=False)
+    extend_parser(parser)
+    return parser
 
+
+def extend_parser(parser, is_binlog_file=False):
     connect_setting = parser.add_argument_group('connect setting')
     connect_setting.add_argument('-h', '--host', dest='host', type=str,
                                  help='Host the MySQL database server located', default='127.0.0.1')
@@ -127,23 +131,6 @@ def parse_args():
                                  help='MySQL Password to use', default='')
     connect_setting.add_argument('-P', '--port', dest='port', type=int,
                                  help='MySQL port to use', default=3306)
-
-    interval = parser.add_argument_group('interval filter')
-    interval.add_argument('--start-file', dest='start_file', type=str, help='Start binlog file to be parsed')
-    interval.add_argument('--start-position', '--start-pos', dest='start_pos', type=int,
-                          help='Start position of the --start-file', default=4)
-    interval.add_argument('--stop-file', '--end-file', dest='end_file', type=str,
-                          help="Stop binlog file to be parsed. default: '--start-file'", default='')
-    interval.add_argument('--stop-position', '--end-pos', dest='end_pos', type=int,
-                          help="Stop position. default: latest position of '--stop-file'", default=0)
-    interval.add_argument('--start-datetime', dest='start_time', type=str,
-                          help="Start time. format %%Y-%%m-%%d %%H:%%M:%%S", default='')
-    interval.add_argument('--stop-datetime', dest='stop_time', type=str,
-                          help="Stop Time. format %%Y-%%m-%%d %%H:%%M:%%S;", default='')
-    interval.add_argument('--include-gtids', dest='include_gtids', type=str,
-                          help="Include Gtids. format @server_uuid:1-10[:20-30][:...]", default='')
-    interval.add_argument('--exclude-gtids', dest='exclude_gtids', type=str,
-                          help="Exclude Gtids. format @server_uuid:1-10[:20-30][:...]", default='')
 
     schema = parser.add_argument_group('schema filter')
     schema.add_argument('-d', '--databases', dest='databases', type=str, nargs='*',
@@ -156,8 +143,39 @@ def parse_args():
                         help='tables you want to ignore', default='')
     schema.add_argument('-ic', '--ignore-columns', dest='ignore_columns', type=str, nargs='*',
                         help='columns you want to ignore', default='')
+    if is_binlog_file:
+        schema.add_argument('--ignore-virtual-columns', dest='ignore_virtual_columns', action='store_true',
+                            help='Ignore virtual columns', default=False)
 
-    event = parser.add_argument_group('type filter')
+    interval = parser.add_argument_group('interval filter')
+    interval.add_argument('--start-position', '--start-pos', dest='start_pos', type=int,
+                          help='Start position of the --start-file', default=4)
+    interval.add_argument('--stop-position', '--end-pos', dest='end_pos', type=int,
+                          help="Stop position. default: latest position of '--stop-file'", default=0)
+    interval.add_argument('--start-datetime', dest='start_time', type=str,
+                          help="Start reading the binlog at first event having a datetime equal or posterior to "
+                               "the argument; the argument must be a date and time in the local time zone, "
+                               "in any format accepted by the MySQL server for DATETIME and TIMESTAMP types, "
+                               "for example: 2004-12-25 11:25:56 (you should probably use quotes for your shell "
+                               "to set it properly).",
+                          default='')
+    interval.add_argument('--stop-datetime', dest='stop_time', type=str,
+                          help="Stop reading the binlog at first event having a datetime equal or posterior to "
+                               "the argument; the argument must be a date and time in the local time zone, "
+                               "in any format accepted by the MySQL server for DATETIME and TIMESTAMP types, "
+                               "for example: 2004-12-25 11:25:56 (you should probably use quotes for your shell "
+                               "to set it properly).",
+                          default='')
+    interval.add_argument('--include-gtids', dest='include_gtids', type=str,
+                          help="Include Gtids. format @server_uuid:1-10[:20-30][:...]", default='')
+    interval.add_argument('--exclude-gtids', dest='exclude_gtids', type=str,
+                          help="Exclude Gtids. format @server_uuid:1-10[:20-30][:...]", default='')
+    if not is_binlog_file:
+        interval.add_argument('--start-file', dest='start_file', type=str, help='Start binlog file to be parsed')
+        interval.add_argument('--stop-file', '--end-file', dest='end_file', type=str,
+                              help="Stop binlog file to be parsed. default: '--start-file'", default='')
+
+    event = parser.add_argument_group('event filter')
     event.add_argument('--only-dml', dest='only_dml', action='store_true', default=False,
                        help='only print dml, ignore ddl')
     event.add_argument('--sql-type', dest='sql_type', type=str, nargs='*', default=['INSERT', 'UPDATE', 'DELETE'],
@@ -210,7 +228,9 @@ def parse_args():
     result.add_argument('--no-date', dest='no_date', action='store_true', default=False,
                         help='If set, we will change table per filename to ${db}.${tb}.sql '
                              'default: ${db}.${tb}_${date}.sql')
-    return parser
+    result.add_argument('--where', dest='where', type=str, nargs='*',
+                        help='filter result by specify conditions.')
+    return
 
 
 def command_line_args(args):
@@ -399,7 +419,7 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
                                  rename_db=None, only_pk=False, only_return_sql=True, ignore_columns=None,
                                  replace=False, insert_ignore=False, ignore_virtual_columns=False,
                                  remove_not_update_col=False, binlog_gtid=None, update_to_replace=False,
-                                 keep_not_update_col: list = None):
+                                 keep_not_update_col: list = None, filter_conditions: list = None):
     if flashback and no_pk:
         raise ValueError('only one of flashback or no_pk can be True')
     if not (isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, UpdateRowsEvent)
@@ -416,21 +436,23 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
             binlog_event, row=row, flashback=flashback, no_pk=no_pk, rename_db=rename_db, only_pk=only_pk,
             ignore_columns=ignore_columns, replace=replace, insert_ignore=insert_ignore, return_type=True,
             ignore_virtual_columns=ignore_virtual_columns, remove_not_update_col=remove_not_update_col,
-            update_to_replace=update_to_replace, keep_not_update_col=keep_not_update_col
+            update_to_replace=update_to_replace, keep_not_update_col=keep_not_update_col,
+            filter_conditions=filter_conditions,
         )
 
-        # cursor.mogrify 处理 value 时，会返回一个字符串，如果 value 里包含 dict，则会报错
-        if isinstance(pattern['values'], list):
-            pattern_values = handle_list(pattern['values'])
-        else:
-            pattern_values = pattern['values']
-        sql = cursor.mogrify(pattern['template'], pattern_values)
-        if "'0x" in str(sql):
-            sql = fix_hex_values(sql, pattern_values, types)
-        time = datetime.datetime.fromtimestamp(binlog_event.timestamp)
-        sql += ' #start %s end %s time %s' % (e_start_pos, binlog_event.packet.log_pos, time)
-        if binlog_gtid:
-            sql += ' gtid %s' % binlog_gtid
+        if pattern['values']:
+            # cursor.mogrify 处理 value 时，会返回一个字符串，如果 value 里包含 dict，则会报错
+            if isinstance(pattern['values'], list):
+                pattern_values = handle_list(pattern['values'])
+            else:
+                pattern_values = pattern['values']
+            sql = cursor.mogrify(pattern['template'], pattern_values)
+            if "'0x" in str(sql):
+                sql = fix_hex_values(sql, pattern_values, types)
+            time = datetime.datetime.fromtimestamp(binlog_event.timestamp)
+            sql += ' #start %s end %s time %s' % (e_start_pos, binlog_event.packet.log_pos, time)
+            if binlog_gtid:
+                sql += ' gtid %s' % binlog_gtid
     elif flashback is False and isinstance(binlog_event, QueryEvent) and binlog_event.query != 'BEGIN' \
             and binlog_event.query != 'COMMIT':
         if binlog_event.schema:
@@ -446,10 +468,75 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
         return sql
 
 
+def check_condition_match_row(filter_conditions, values, check_match_flag):
+    for cond_elem in filter_conditions:
+        # 校验单个条件
+        if isinstance(cond_elem, dict):
+            cond_column = cond_elem['column']
+            cond_value = cond_elem['value']
+            cond_calc_type = cond_elem['calc_type']
+            # 定义的条件字段存在于 WHERE 条件中，则进行检验；不存在则直接将这条数据置为不符合条件的数据
+            # 有多个条件时，需要校验多次，以最后一次的校验结果为准
+            if cond_column in values:
+                if cond_calc_type in ['=', '>=', '<=', 'IS'] and values[cond_column] == cond_value:
+                    check_match_flag = 1
+                elif cond_calc_type in ['>=', '>'] and values[cond_column] > cond_value:
+                    check_match_flag = 1
+                elif cond_calc_type in ['<=', '<'] and values[cond_column] < cond_value:
+                    check_match_flag = 1
+                elif cond_calc_type in ['!=', '<>'] and values[cond_column] != cond_value:
+                    check_match_flag = 1
+                elif cond_calc_type == 'IN' and values[cond_column] in cond_value:
+                    check_match_flag = 1
+                else:
+                    check_match_flag = 0
+            # 中途若有一个条件校验不通过，则提前终止，将该行数据置为不符合条件的数据
+            else:
+                check_match_flag = 0
+                break
+        # 校验 OR 条件
+        elif isinstance(cond_elem, tuple):
+            check_match_flag = 0
+            for cond in cond_elem:
+                cond_column = cond['column']
+                cond_value = cond['value']
+                cond_calc_type = cond['calc_type']
+                # 校验 OR 条件时，第 1 个校验不通过，继续校验后续的
+                # 只要有一个校验通过，校验标志会被置为 1 （默认为 0）
+                if cond_column in values:
+                    if cond_calc_type in ['=', '>=', '<=', 'IS'] and values[cond_column] == cond_value:
+                        check_match_flag = 1
+                        break
+                    elif cond_calc_type in ['>=', '>'] and values[cond_column] > cond_value:
+                        check_match_flag = 1
+                        break
+                    elif cond_calc_type in ['<=', '<'] and values[cond_column] < cond_value:
+                        check_match_flag = 1
+                        break
+                    elif cond_calc_type in ['!=', '<>'] and values[cond_column] != cond_value:
+                        check_match_flag = 1
+                        break
+                    elif cond_calc_type == 'IN' and values[cond_column] in cond_value:
+                        check_match_flag = 1
+                        break
+    return check_match_flag
+
+
 def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, rename_db=None, only_pk=False,
                          ignore_columns=None, replace=False, insert_ignore=False, ignore_virtual_columns=False,
                          remove_not_update_col=False, return_type=False, update_to_replace=False,
-                         keep_not_update_col: list = None):
+                         keep_not_update_col: list = None, filter_conditions: list = None):
+
+    # 检查是否有符合条件的数据：-1 表示默认值，0 表示不符合，1 表示符合
+    check_match_flag = -1
+
+    # 有条件情况下，只返回符合条件的数据；没有条件的情况下，返回所有数据
+    if filter_conditions:
+        if isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, DeleteRowsEvent):
+            check_match_flag = check_condition_match_row(filter_conditions, row['values'], check_match_flag)
+        elif isinstance(binlog_event, UpdateRowsEvent):
+            check_match_flag = check_condition_match_row(filter_conditions, row['before_values'], check_match_flag)
+
     if ignore_columns and is_dml_event(binlog_event):
         if isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, DeleteRowsEvent):
             for k in row['values'].copy():
@@ -482,6 +569,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                 if k == binlog_event.primary_key:
                     row['after_values'].pop(k)
                 elif keep_not_update_col and k in keep_not_update_col:
+                    row['after_values'].pop(k)
                     continue
                 else:
                     row['before_values'].pop(k)
@@ -493,158 +581,156 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
     db = binlog_event.schema
     table = binlog_event.table
     fix_object_new = partial(fix_object, is_return_type=True)
-    if flashback is True:
-        if isinstance(binlog_event, WriteRowsEvent):
-            db = rename_db if rename_db else binlog_event.schema
-            if not only_pk:
-                template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
-                    db, binlog_event.table,
-                    ' AND '.join(map(compare_items, row['values'].items()))
-                )
-                values = map(fix_object, row['values'].values())
-                types = map(fix_object_new, row['values'].values())
-            else:
-                pk_item = {
-                    binlog_event.primary_key: row['values'].get(binlog_event.primary_key)
-                }
-                template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
-                    db, binlog_event.table,
-                    ' AND '.join(map(compare_items, pk_item.items()))
-                )
-                values = map(fix_object, pk_item.values())
-                types = map(fix_object_new, row['values'].values())
-        elif isinstance(binlog_event, DeleteRowsEvent):
-            db = rename_db if rename_db else binlog_event.schema
-            if replace:
-                template = 'REPLACE INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
-                    db, binlog_event.table,
-                    ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
-                    ', '.join(['%s'] * len(row['values']))
-                )
-            elif insert_ignore:
-                template = 'INSERT IGNORE INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
-                    db, binlog_event.table,
-                    ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
-                    ', '.join(['%s'] * len(row['values']))
-                )
-            else:
-                template = 'INSERT INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
-                    db, binlog_event.table,
-                    ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
-                    ', '.join(['%s'] * len(row['values']))
-                )
-            values = map(fix_object, row['values'].values())
-            types = map(fix_object_new, row['values'].values())
-        elif isinstance(binlog_event, UpdateRowsEvent):
-            db = rename_db if rename_db else binlog_event.schema
-            if not update_to_replace:
+
+    if check_match_flag in [-1, 1]:
+        if flashback is True:
+            if isinstance(binlog_event, WriteRowsEvent):
+                db = rename_db if rename_db else binlog_event.schema
                 if not only_pk:
-                    template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
+                    template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
                         db, binlog_event.table,
-                        ', '.join(['`%s`=%%s' % x for x in row['before_values'].keys()]),
-                        ' AND '.join(map(compare_items, row['after_values'].items())))
-                    values = map(fix_object, list(row['before_values'].values()) + list(row['after_values'].values()))
-                    types = map(
-                        fix_object_new, list(row['before_values'].values()) + list(row['after_values'].values())
+                        ' AND '.join(map(compare_items, row['values'].items()))
                     )
+                    values = map(fix_object, row['values'].values())
+                    types = map(fix_object_new, row['values'].values())
                 else:
                     pk_item = {
-                        binlog_event.primary_key: row['after_values'].get(binlog_event.primary_key)
+                        binlog_event.primary_key: row['values'].get(binlog_event.primary_key)
                     }
-                    template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
+                    template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
                         db, binlog_event.table,
-                        ', '.join(['`%s`=%%s' % x for x in row['before_values'].keys()]),
-                        ' AND '.join(map(compare_items, pk_item.items())))
-                    values = map(fix_object, list(row['before_values'].values()) + list(pk_item.values()))
-                    types = map(fix_object_new, list(row['before_values'].values()) + list(pk_item.values()))
-            else:
-                template = 'REPLACE INTO `{0}`.`{1}` SET {2};'.format(
-                    db, binlog_event.table,
-                    ', '.join(['`%s`=%%s' % x for x in row['before_values'].keys()]))
-                values = map(fix_object, list(row['before_values'].values()))
-                types = map(fix_object_new, list(row['before_values'].values()))
-    else:
-        if isinstance(binlog_event, WriteRowsEvent):
-            if no_pk:
-                # print binlog_event.__dict__
-                # tableInfo = (binlog_event.table_map)[binlog_event.table_id]
-                # if tableInfo.primary_key:
-                #     row['values'].pop(tableInfo.primary_key)
-                if binlog_event.primary_key:
-                    row['values'].pop(binlog_event.primary_key)
-
-            db = rename_db if rename_db else binlog_event.schema
-            if replace:
-                template = 'REPLACE INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
-                    db, binlog_event.table,
-                    ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
-                    ', '.join(['%s'] * len(row['values']))
-                )
-
-            elif insert_ignore:
-                template = 'INSERT IGNORE INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
-                    db, binlog_event.table,
-                    ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
-                    ', '.join(['%s'] * len(row['values']))
-                )
-            else:
-                template = 'INSERT INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
-                    db, binlog_event.table,
-                    ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
-                    ', '.join(['%s'] * len(row['values']))
-                )
-            values = map(fix_object, row['values'].values())
-            types = map(fix_object_new, row['values'].values())
-        elif isinstance(binlog_event, DeleteRowsEvent):
-            db = rename_db if rename_db else binlog_event.schema
-            if not only_pk:
-                template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
-                    db, binlog_event.table, ' AND '.join(map(compare_items, row['values'].items())))
-                values = map(fix_object, row['values'].values())
-                types = map(fix_object_new, row['values'].values())
-            else:
-                pk_item = {
-                    binlog_event.primary_key: row['values'].get(binlog_event.primary_key)
-                }
-                template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
-                    db, binlog_event.table, ' AND '.join(map(compare_items, pk_item.items())))
-                values = map(fix_object, pk_item.values())
-                types = map(fix_object_new, pk_item.values())
-        elif isinstance(binlog_event, UpdateRowsEvent):
-            db = rename_db if rename_db else binlog_event.schema
-            if not update_to_replace:
-                if not only_pk:
-                    template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
-                        db, binlog_event.table,
-                        ', '.join(['`%s`=%%s' % k for k in row['after_values'].keys()]),
-                        ' AND '.join(map(compare_items, row['before_values'].items()))
-                    )
-                    values = map(fix_object, list(row['after_values'].values()) + list(row['before_values'].values()))
-                    types = map(fix_object_new,
-                                list(row['after_values'].values()) + list(row['before_values'].values()))
-                else:
-                    pk_item = {
-                        binlog_event.primary_key: row['before_values'].get(binlog_event.primary_key)
-                    }
-                    template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
-                        db, binlog_event.table,
-                        ', '.join(['`%s`=%%s' % k for k in row['after_values'].keys()]),
                         ' AND '.join(map(compare_items, pk_item.items()))
                     )
-                    values = map(fix_object, list(row['after_values'].values()) + list(pk_item.values()))
-                    types = map(fix_object_new, list(row['after_values'].values()) + list(pk_item.values()))
-            else:
-                template = 'REPLACE INTO `{0}`.`{1}` SET {2};'.format(
-                    db, binlog_event.table,
-                    ', '.join(['`%s`=%%s' % k for k in row['after_values'].keys()])
-                )
-                values = map(fix_object, list(row['after_values'].values()))
-                types = map(fix_object_new, list(row['after_values'].values()))
+                    values = map(fix_object, pk_item.values())
+                    types = map(fix_object_new, row['values'].values())
+            elif isinstance(binlog_event, DeleteRowsEvent):
+                db = rename_db if rename_db else binlog_event.schema
+                if replace:
+                    template = 'REPLACE INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
+                        db, binlog_event.table,
+                        ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
+                        ', '.join(['%s'] * len(row['values']))
+                    )
+                elif insert_ignore:
+                    template = 'INSERT IGNORE INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
+                        db, binlog_event.table,
+                        ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
+                        ', '.join(['%s'] * len(row['values']))
+                    )
+                else:
+                    template = 'INSERT INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
+                        db, binlog_event.table,
+                        ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
+                        ', '.join(['%s'] * len(row['values']))
+                    )
+                values = map(fix_object, row['values'].values())
+                types = map(fix_object_new, row['values'].values())
+            elif isinstance(binlog_event, UpdateRowsEvent):
+                db = rename_db if rename_db else binlog_event.schema
+                if not update_to_replace:
+                    if not only_pk:
+                        template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
+                            db, binlog_event.table,
+                            ', '.join(['`%s`=%%s' % x for x in row['before_values'].keys()]),
+                            ' AND '.join(map(compare_items, row['after_values'].items())))
+                        values = map(fix_object, list(row['before_values'].values()) + list(row['after_values'].values()))
+                        types = map(
+                            fix_object_new, list(row['before_values'].values()) + list(row['after_values'].values())
+                        )
+                    else:
+                        pk_item = {
+                            binlog_event.primary_key: row['after_values'].get(binlog_event.primary_key)
+                        }
+                        template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
+                            db, binlog_event.table,
+                            ', '.join(['`%s`=%%s' % x for x in row['before_values'].keys()]),
+                            ' AND '.join(map(compare_items, pk_item.items())))
+                        values = map(fix_object, list(row['before_values'].values()) + list(pk_item.values()))
+                        types = map(fix_object_new, list(row['before_values'].values()) + list(pk_item.values()))
+                else:
+                    template = 'REPLACE INTO `{0}`.`{1}` SET {2};'.format(
+                        db, binlog_event.table,
+                        ', '.join(['`%s`=%%s' % x for x in row['before_values'].keys()]))
+                    values = map(fix_object, list(row['before_values'].values()))
+                    types = map(fix_object_new, list(row['before_values'].values()))
+        else:
+            if isinstance(binlog_event, WriteRowsEvent):
+                if no_pk:
+                    if binlog_event.primary_key:
+                        row['values'].pop(binlog_event.primary_key)
+
+                db = rename_db if rename_db else binlog_event.schema
+                if replace:
+                    template = 'REPLACE INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
+                        db, binlog_event.table,
+                        ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
+                        ', '.join(['%s'] * len(row['values']))
+                    )
+
+                elif insert_ignore:
+                    template = 'INSERT IGNORE INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
+                        db, binlog_event.table,
+                        ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
+                        ', '.join(['%s'] * len(row['values']))
+                    )
+                else:
+                    template = 'INSERT INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
+                        db, binlog_event.table,
+                        ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
+                        ', '.join(['%s'] * len(row['values']))
+                    )
+                values = map(fix_object, row['values'].values())
+                types = map(fix_object_new, row['values'].values())
+            elif isinstance(binlog_event, DeleteRowsEvent):
+                db = rename_db if rename_db else binlog_event.schema
+                if not only_pk:
+                    template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
+                        db, binlog_event.table, ' AND '.join(map(compare_items, row['values'].items())))
+                    values = map(fix_object, row['values'].values())
+                    types = map(fix_object_new, row['values'].values())
+                else:
+                    pk_item = {
+                        binlog_event.primary_key: row['values'].get(binlog_event.primary_key)
+                    }
+                    template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
+                        db, binlog_event.table, ' AND '.join(map(compare_items, pk_item.items())))
+                    values = map(fix_object, pk_item.values())
+                    types = map(fix_object_new, pk_item.values())
+            elif isinstance(binlog_event, UpdateRowsEvent):
+                db = rename_db if rename_db else binlog_event.schema
+                if not update_to_replace:
+                    if not only_pk:
+                        template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
+                            db, binlog_event.table,
+                            ', '.join(['`%s`=%%s' % k for k in row['after_values'].keys()]),
+                            ' AND '.join(map(compare_items, row['before_values'].items()))
+                        )
+                        values = map(fix_object, list(row['after_values'].values()) + list(row['before_values'].values()))
+                        types = map(fix_object_new,
+                                    list(row['after_values'].values()) + list(row['before_values'].values()))
+                    else:
+                        pk_item = {
+                            binlog_event.primary_key: row['before_values'].get(binlog_event.primary_key)
+                        }
+                        template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
+                            db, binlog_event.table,
+                            ', '.join(['`%s`=%%s' % k for k in row['after_values'].keys()]),
+                            ' AND '.join(map(compare_items, pk_item.items()))
+                        )
+                        values = map(fix_object, list(row['after_values'].values()) + list(pk_item.values()))
+                        types = map(fix_object_new, list(row['after_values'].values()) + list(pk_item.values()))
+                else:
+                    template = 'REPLACE INTO `{0}`.`{1}` SET {2};'.format(
+                        db, binlog_event.table,
+                        ', '.join(['`%s`=%%s' % k for k in row['after_values'].keys()])
+                    )
+                    values = map(fix_object, list(row['after_values'].values()))
+                    types = map(fix_object_new, list(row['after_values'].values()))
 
     result = (
         {'template': template, 'values': list(values)},
-        db.replace('`', ''),
-        table.replace('`', '')
+        db,
+        table,
     )
     if return_type:
         return result, list(types)
@@ -740,7 +826,6 @@ def get_table_name(sql):
 
 def handle_rollback_sql(f_result_sql_file, table_per_file, date_prefix, no_date, result_dir,
                         src_file, chunk_size, tmp_dir, result_file):
-
     if f_result_sql_file:
         reversed_seq(src_file, chunk_size, tmp_dir, result_file, delete_tmp_dir=False)
     else:
@@ -775,3 +860,106 @@ def handle_rollback_sql(f_result_sql_file, table_per_file, date_prefix, no_date,
         finally:
             if os.path.exists(tmp_file):
                 os.remove(tmp_file)
+    return
+
+
+def parse_split_condition(cond, condition_list):
+    cond = re.sub(' [iI][sS] ', ' IS ', cond)
+    cond = re.sub(' [iI][nN] ', ' IN ', cond)
+    if '>=' in cond:
+        calc_type = '>='
+    elif '<=' in cond:
+        calc_type = '<='
+    elif '!=' in cond:
+        calc_type = '!='
+    elif '<>' in cond:
+        calc_type = '<>'
+    elif '=' in cond:
+        calc_type = '='
+    elif '>' in cond:
+        calc_type = '>'
+    elif '<' in cond:
+        calc_type = '<'
+    elif ' IS ' in cond:
+        calc_type = ' IS '
+        cond = re.sub(' [nN][uU][lL][lL]', ' NULL', cond)
+    elif ' IN ' in cond:
+        calc_type = ' IN '
+    else:
+        logger.warning(f"Ignore condition: {cond} !!! We Don't support condition like that.")
+        return
+
+    cond_split = cond.split(calc_type)
+    value = calc_type.join(cond_split[1:]).strip()
+    if calc_type == ' IN ':
+        left_quote_idx = value.find('(')
+        right_quote_idx = value.rfind(')')
+        quote_part = value[left_quote_idx + 1: right_quote_idx]
+        quote_part_value = quote_part.split(',')
+        if '{' in quote_part:
+            json_mark_left_cnt = quote_part.count('{')
+            json_mark_right_cnt = quote_part.count('}')
+            if json_mark_left_cnt == json_mark_right_cnt:
+                quote_part_value = fix_json_col(quote_part_value)
+        value = []
+        for v in quote_part_value:
+            try:
+                if isinstance(v, str):
+                    v = int(v)
+            except ValueError:
+                pass
+            value.append(v)
+
+    try:
+        if isinstance(value, str):
+            value = int(value)
+    except ValueError:
+        pass
+
+    condition_list.append({
+        "column": cond_split[0].strip().replace('`', ''),
+        "calc_type": calc_type.strip(),
+        "value": value,
+    })
+
+
+def split_condition(src_conditions):
+    """拆分 WHERE 条件
+    WHERE 条件：
+        and
+        or
+        in
+        between ... and ...
+        > < >= <= = !=
+        is null
+
+    思路：
+        不需要有 and， 用 nargs='*' 即可实现 and 的效果，需要 or 的话，在单个条件里加上即可
+        不需要有 between ... and ... ，用两个分别具备 >= 和 <= 的条件实现即可
+    最终效果：
+        最终的条件组合就是一个数组，数组里面的每个元素是一个 json(dict)
+        json 的组成：
+            key: column, value: 列名,
+            key: calc_type, value: 条件符号，如 > < >= <= = != IS in
+            key: value, value: 条件值
+    """
+    condition_list = []
+    for condition in src_conditions:
+        if ' AND ' in condition.upper():
+            logger.error(f"""Invalid condition {condition}. Multi conditions format：--where 'c1=v1' 'c2=v2' """)
+            sys.exit(1)
+        if condition.lstrip().startswith('(') and condition.rstrip().endswith(')'):
+            logger.error(f"Invalid condition: {condition} !!! Don't use parentheses before and after")
+            sys.exit(1)
+
+        condition = re.sub(' [oO][rR] ', ' OR ', condition)
+        condition_split = condition.split(' OR ')
+        if len(condition_split) == 1:
+            for cond in condition_split:
+                parse_split_condition(cond, condition_list)
+        else:
+            condition_list_tmp = []
+            for cond in condition_split:
+                parse_split_condition(cond, condition_list_tmp)
+            condition_list.append(tuple(condition_list_tmp))
+    return condition_list
