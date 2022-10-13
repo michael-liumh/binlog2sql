@@ -7,14 +7,13 @@ import sys
 import time
 import pymysql
 import re
-from binlogfile2sql_util import command_line_args, BinLogFileReader, get_binlog_file_list, timestamp_to_datetime, \
-    save_executed_result
-from binlog2sql_util import concat_sql_from_binlog_event, is_dml_event, event_type, logger, set_log_format, \
+from utils.binlogfile2sql_util import command_line_args, BinLogFileReader
+from utils.binlog2sql_util import concat_sql_from_binlog_event, is_dml_event, event_type, logger, set_log_format, \
     get_gtid_set, is_want_gtid, save_result_sql, dt_now, create_unique_file, temp_open, handle_rollback_sql, \
-    split_condition
+    get_max_gtid, remove_max_gtid
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent, GtidEvent
-
 from utils.sort_binlog2sql_result_utils import check_dir_if_empty
+from utils.other_utils import get_binlog_file_list, timestamp_to_datetime, save_executed_result, split_condition
 
 sep = '/' if '/' in sys.argv[0] else os.sep
 
@@ -69,6 +68,7 @@ class BinlogFile2sql(object):
         self.file_index = file_index
         self.remove_not_update_col = remove_not_update_col
         self.gtid_set = get_gtid_set(include_gtids, exclude_gtids)
+        self.gtid_max_dict = get_max_gtid(self.gtid_set.get('include', {}))
         self.update_to_replace = update_to_replace
         self.keep_not_update_col = keep_not_update_col
         self.no_date = no_date
@@ -108,6 +108,7 @@ class BinlogFile2sql(object):
         if self.table_per_file:
             logger.info(f'Saving table per file into dir: [{self.result_dir}]')
 
+        flashback_warn_flag = 1
         binlog_gtid = ''
         gtid_set = True if self.gtid_set else False
         flag_last_event = False
@@ -140,6 +141,12 @@ class BinlogFile2sql(object):
 
                 if isinstance(binlog_event, GtidEvent):
                     binlog_gtid = str(binlog_event.gtid)
+                    if self.gtid_max_dict:
+                        remove_max_gtid(self.gtid_max_dict, binlog_gtid)
+                        if not self.gtid_max_dict:
+                            logger.info('The parse process exited because the gtid condition reached the maximum '
+                                        'value, or may be you give a invalid gtid sets to args --include-gtid')
+                            break
 
                 if isinstance(binlog_event, QueryEvent) and not self.only_dml:
                     if binlog_gtid and gtid_set and not is_want_gtid(self.gtid_set, binlog_gtid):
@@ -181,6 +188,11 @@ class BinlogFile2sql(object):
                             else:
                                 print(sql)
                         else:
+                            if flashback_warn_flag == 1:
+                                logger.warning(
+                                    f'Saving the result into the temp file, please wait until the parsing '
+                                    f'process is done, then reverse the order of results to you.')
+                                flashback_warn_flag = 0
                             f_tmp.write(sql + '\n')
                 elif is_dml_event(binlog_event) and event_type(binlog_event) in self.sql_type:
                     for row in binlog_event.rows:
@@ -224,6 +236,11 @@ class BinlogFile2sql(object):
                                 else:
                                     print(sql)
                             else:
+                                if flashback_warn_flag == 1:
+                                    logger.warning(
+                                        f'Saving the result into the temp file, please wait until the parsing '
+                                        f'process is done, then reverse the order of results to you.')
+                                    flashback_warn_flag = 0
                                 f_tmp.write(sql + '\n')
 
                 if not (isinstance(binlog_event, RotateEvent) or isinstance(binlog_event, FormatDescriptionEvent)):

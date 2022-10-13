@@ -7,10 +7,11 @@ import pymysql
 import os
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent, GtidEvent
-from binlog2sql_util import command_line_args, concat_sql_from_binlog_event, is_dml_event, event_type, logger, \
+from utils.binlog2sql_util import command_line_args, concat_sql_from_binlog_event, is_dml_event, event_type, logger, \
     set_log_format, get_gtid_set, is_want_gtid, save_result_sql, dt_now, create_unique_file, temp_open, \
-    handle_rollback_sql, split_condition
+    handle_rollback_sql, get_max_gtid, remove_max_gtid
 from utils.sort_binlog2sql_result_utils import check_dir_if_empty
+from utils.other_utils import split_condition
 
 sep = '/' if '/' in sys.argv[0] else os.sep
 
@@ -68,6 +69,7 @@ class Binlog2sql(object):
         self.table_per_file = table_per_file
         self.date_prefix = date_prefix
         self.gtid_set = get_gtid_set(include_gtids, exclude_gtids)
+        self.gtid_max_dict = get_max_gtid(self.gtid_set.get('include', {}))
         self.update_to_replace = update_to_replace
         self.keep_not_update_col = keep_not_update_col
         self.no_date = no_date
@@ -119,6 +121,8 @@ class Binlog2sql(object):
         e_start_pos, last_pos = stream.log_pos, stream.log_pos
         tmp_file = create_unique_file('%s.%s' % (self.conn_setting['host'], self.conn_setting['port']))
         tmp_file = os.path.join(self.tmp_dir, tmp_file)
+        flashback_warn_flag = 1
+
         with temp_open(tmp_file, "w") as f_tmp, self.connection as cursor:
             for binlog_event in stream:
                 # 返回的 EVENT 顺序
@@ -162,6 +166,12 @@ class Binlog2sql(object):
 
                 if isinstance(binlog_event, GtidEvent):
                     binlog_gtid = str(binlog_event.gtid)
+                    if self.gtid_max_dict:
+                        remove_max_gtid(self.gtid_max_dict, binlog_gtid)
+                        if not self.gtid_max_dict:
+                            logger.info('The parse process exited because the gtid condition reached the maximum '
+                                        'value, or may be you give a invalid gtid sets to args --include-gtid')
+                            break
 
                 if isinstance(binlog_event, QueryEvent) and not self.only_dml:
                     if binlog_gtid and gtid_set and not is_want_gtid(self.gtid_set, binlog_gtid):
@@ -202,6 +212,10 @@ class Binlog2sql(object):
                             else:
                                 print(sql)
                         else:
+                            if flashback_warn_flag == 1:
+                                logger.warning(f'Saving the result into the temp file, please wait until the parsing '
+                                               f'process is done, then reverse the order of results to you.')
+                                flashback_warn_flag = 0
                             f_tmp.write(sql + '\n')
                 elif is_dml_event(binlog_event) and event_type(binlog_event) in self.sql_type:
                     for row in binlog_event.rows:
@@ -244,6 +258,11 @@ class Binlog2sql(object):
                                     else:
                                         print(sql)
                                 else:
+                                    if flashback_warn_flag == 1:
+                                        logger.warning(
+                                            f'Saving the result into the temp file, please wait until the parsing '
+                                            f'process is done, then reverse the order of results to you.')
+                                        flashback_warn_flag = 0
                                     f_tmp.write(sql + '\n')
                         except Exception:
                             logger.exception('')

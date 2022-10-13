@@ -20,7 +20,6 @@ from pymysqlreplication.row_event import (
     DeleteRowsEvent,
 )
 from utils.sort_binlog2sql_result_utils import reversed_seq, yield_file
-from utils.json_utils import fix_json_col
 
 if sys.version > '3':
     PY3PLUS = True
@@ -770,9 +769,9 @@ def get_gtid_set(include_gtids, exclude_gtids):
 
 
 def is_want_gtid(gtid_set, gtid):
-    gtid_splited = gtid.split(':')
-    uuid = gtid_splited[0]
-    txn = int(gtid_splited[1])
+    gtid_split = gtid.split(':')
+    uuid = gtid_split[0]
+    txn = int(gtid_split[1])
     if 'include' in gtid_set and uuid in gtid_set['include']:
         txn_ranges = gtid_set['include'][uuid]
         for txn_range in txn_ranges:
@@ -795,9 +794,37 @@ def is_want_gtid(gtid_set, gtid):
             return True
 
 
+def get_max_gtid(include_gtid_set):
+    gtid_max_dict = {}
+    for uuid, txn_ranges in include_gtid_set.items():
+        for txn_range in txn_ranges:
+            txn_split = txn_range.split('-')
+            txn_min = int(txn_split[0])
+            txn_max = int(txn_split[1]) if len(txn_split) > 1 else txn_min
+            if uuid in gtid_max_dict:
+                gtid_max = gtid_max_dict[uuid]
+                if txn_max > gtid_max:
+                    gtid_max_dict[uuid] = txn_max
+            else:
+                gtid_max_dict[uuid] = txn_max
+    return gtid_max_dict
+
+
+def remove_max_gtid(gtid_max_dict, gtid):
+    gtid_split = gtid.split(':')
+    uuid = gtid_split[0]
+    txn = int(gtid_split[1])
+    if uuid in gtid_max_dict:
+        txn_max = gtid_max_dict[uuid]
+        if txn > txn_max:
+            del gtid_max_dict[uuid]
+    return
+
+
 def save_result_sql(result_file, msg, mode='a', encoding='utf8'):
     with open(result_file, mode=mode, encoding=encoding) as f:
         f.write(msg)
+    return
 
 
 def dt_now(datetime_format: str = None) -> str:
@@ -861,105 +888,3 @@ def handle_rollback_sql(f_result_sql_file, table_per_file, date_prefix, no_date,
             if os.path.exists(tmp_file):
                 os.remove(tmp_file)
     return
-
-
-def parse_split_condition(cond, condition_list):
-    cond = re.sub(' [iI][sS] ', ' IS ', cond)
-    cond = re.sub(' [iI][nN] ', ' IN ', cond)
-    if '>=' in cond:
-        calc_type = '>='
-    elif '<=' in cond:
-        calc_type = '<='
-    elif '!=' in cond:
-        calc_type = '!='
-    elif '<>' in cond:
-        calc_type = '<>'
-    elif '=' in cond:
-        calc_type = '='
-    elif '>' in cond:
-        calc_type = '>'
-    elif '<' in cond:
-        calc_type = '<'
-    elif ' IS ' in cond:
-        calc_type = ' IS '
-        cond = re.sub(' [nN][uU][lL][lL]', ' NULL', cond)
-    elif ' IN ' in cond:
-        calc_type = ' IN '
-    else:
-        logger.warning(f"Ignore condition: {cond} !!! We Don't support condition like that.")
-        return
-
-    cond_split = cond.split(calc_type)
-    value = calc_type.join(cond_split[1:]).strip()
-    if calc_type == ' IN ':
-        left_quote_idx = value.find('(')
-        right_quote_idx = value.rfind(')')
-        quote_part = value[left_quote_idx + 1: right_quote_idx]
-        quote_part_value = quote_part.split(',')
-        if '{' in quote_part:
-            json_mark_left_cnt = quote_part.count('{')
-            json_mark_right_cnt = quote_part.count('}')
-            if json_mark_left_cnt == json_mark_right_cnt:
-                quote_part_value = fix_json_col(quote_part_value)
-        value = []
-        for v in quote_part_value:
-            try:
-                if isinstance(v, str):
-                    v = int(v)
-            except ValueError:
-                pass
-            value.append(v)
-
-    try:
-        if isinstance(value, str):
-            value = int(value)
-    except ValueError:
-        pass
-
-    condition_list.append({
-        "column": cond_split[0].strip().replace('`', ''),
-        "calc_type": calc_type.strip(),
-        "value": value,
-    })
-
-
-def split_condition(src_conditions):
-    """拆分 WHERE 条件
-    WHERE 条件：
-        and
-        or
-        in
-        between ... and ...
-        > < >= <= = !=
-        is null
-
-    思路：
-        不需要有 and， 用 nargs='*' 即可实现 and 的效果，需要 or 的话，在单个条件里加上即可
-        不需要有 between ... and ... ，用两个分别具备 >= 和 <= 的条件实现即可
-    最终效果：
-        最终的条件组合就是一个数组，数组里面的每个元素是一个 json(dict)
-        json 的组成：
-            key: column, value: 列名,
-            key: calc_type, value: 条件符号，如 > < >= <= = != IS in
-            key: value, value: 条件值
-    """
-    condition_list = []
-    for condition in src_conditions:
-        if ' AND ' in condition.upper():
-            logger.error(f"""Invalid condition {condition}. Multi conditions format：--where 'c1=v1' 'c2=v2' """)
-            sys.exit(1)
-        if condition.lstrip().startswith('(') and condition.rstrip().endswith(')'):
-            logger.error(f"Invalid condition: {condition} !!! Don't use parentheses before and after")
-            sys.exit(1)
-
-        condition = re.sub(' [oO][rR] ', ' OR ', condition)
-        condition_split = condition.split(' OR ')
-        if len(condition_split) == 1:
-            for cond in condition_split:
-                parse_split_condition(cond, condition_list)
-        else:
-            condition_list_tmp = []
-            for cond in condition_split:
-                parse_split_condition(cond, condition_list_tmp)
-            condition_list.append(tuple(condition_list_tmp))
-    return condition_list
