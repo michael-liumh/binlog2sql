@@ -167,7 +167,10 @@ def parse_split_condition(cond, condition_list):
                     v = int(v)
             except ValueError:
                 pass
-            value.append(v)
+            if value in ['""', "''"]:
+                value.append('')
+            else:
+                value.append(v)
 
     try:
         if isinstance(value, str):
@@ -178,7 +181,7 @@ def parse_split_condition(cond, condition_list):
     condition_list.append({
         "column": cond_split[0].strip().replace('`', ''),
         "calc_type": calc_type.strip(),
-        "value": value,
+        "value": '' if value in ['""', "''"] else value,
     })
 
 
