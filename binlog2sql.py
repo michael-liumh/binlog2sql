@@ -82,6 +82,11 @@ class Binlog2sql(object):
         self.args = args
         if args.sync:
             self.rename_db = args.sync_database
+        if self.rename_db and not self.only_dml:
+            logger.error(f'args --rename-db and --sync-database only work for DML SQL.')
+            choice = input('Do you want to continue anyway? y/[n]: ')
+            if choice != 'y':
+                sys.exit(1)
 
         with self.connection as cursor:
             cursor.execute("SHOW MASTER STATUS")

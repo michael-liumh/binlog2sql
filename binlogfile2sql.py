@@ -82,6 +82,11 @@ class BinlogFile2sql(object):
         self.args = args
         if args.sync:
             self.rename_db = args.sync_database
+        if self.rename_db and not self.only_dml:
+            logger.error(f'args --rename-db and --sync-database only work for DML SQL.')
+            choice = input('Do you want to continue anyway? y/[n]: ')
+            if choice != 'y':
+                sys.exit(1)
 
     def process_binlog(self):
         stream = BinLogFileReader(self.file_path, ctl_connection_settings=self.connection_settings,

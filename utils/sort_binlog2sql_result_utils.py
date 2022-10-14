@@ -202,7 +202,10 @@ def reversed_seq(src_file, chunk_size, tmp_dir, dst_file, encoding='utf8', delet
             os.remove(filepath)
     finally:
         if delete_tmp_dir:
-            os.popen(f'rm -rf {tmp_dir}')
+            try:
+                os.removedirs(tmp_dir)
+            except:
+                pass
 
 
 def sort_file_by_time(src_file, chunk_size, tmp_dir, dst_file, encoding='utf8'):
@@ -255,7 +258,10 @@ def sort_file_by_time(src_file, chunk_size, tmp_dir, dst_file, encoding='utf8'):
                 save_to_file(dst_file, file_lines, encoding=encoding, mode='a')
             os.remove(filepath)
     finally:
-        os.popen(f'rm -rf {tmp_dir}')
+        try:
+            os.removedirs(tmp_dir)
+        except:
+            pass
 
 
 def main(args):
