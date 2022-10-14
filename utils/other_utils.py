@@ -7,6 +7,7 @@ import colorlog
 import re
 import time
 from datetime import datetime as dt
+from contextlib import contextmanager
 
 
 # create a logger
@@ -32,6 +33,31 @@ console_format = colorlog.ColoredFormatter(
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(console_format)
 logger.addHandler(console_handler)
+
+
+def create_unique_file(filename, path=None):
+    version = 0
+    result_file = filename
+    # if we have to try more than 1000 times, something is seriously wrong
+    while os.path.exists(result_file) and version < 1000:
+        result_file = filename + '.' + str(version)
+        version += 1
+    if version >= 1000:
+        raise OSError('cannot create unique file %s.[0-1000]' % filename)
+    if path:
+        result_file = os.path.join(path, result_file)
+    return result_file
+
+
+@contextmanager
+def temp_open(filename, mode):
+    f = open(filename, mode)
+    try:
+        yield f
+    finally:
+        f.close()
+        if os.path.exists(filename):
+            os.remove(filename)
 
 
 def read_file(filename):
@@ -74,6 +100,14 @@ def get_binlog_file_list(args):
             executed_file_list.remove(f)
 
     return binlog_file_list, executed_file_list
+
+
+def is_valid_datetime(string):
+    try:
+        dt.strptime(string, "%Y-%m-%d %H:%M:%S")
+        return True
+    except:
+        return False
 
 
 def timestamp_to_datetime(ts: int, datetime_format: str = None) -> str:

@@ -12,13 +12,14 @@ import logging
 import chardet
 import colorlog
 from functools import partial
-from contextlib import contextmanager
 from pymysqlreplication.event import QueryEvent
 from pymysqlreplication.row_event import (
     WriteRowsEvent,
     UpdateRowsEvent,
     DeleteRowsEvent,
 )
+
+from utils.other_utils import is_valid_datetime
 from utils.sort_binlog2sql_result_utils import reversed_seq, yield_file
 
 if sys.version > '3':
@@ -75,39 +76,6 @@ def set_log_format():
     file_handler = logging.handlers.RotatingFileHandler(logfile, maxBytes=file_maxsize, backupCount=10)
     file_handler.setFormatter(logfile_format)
     logger.addHandler(file_handler)
-
-
-def is_valid_datetime(string):
-    try:
-        datetime.datetime.strptime(string, "%Y-%m-%d %H:%M:%S")
-        return True
-    except:
-        return False
-
-
-def create_unique_file(filename, path=None):
-    version = 0
-    result_file = filename
-    # if we have to try more than 1000 times, something is seriously wrong
-    while os.path.exists(result_file) and version < 1000:
-        result_file = filename + '.' + str(version)
-        version += 1
-    if version >= 1000:
-        raise OSError('cannot create unique file %s.[0-1000]' % filename)
-    if path:
-        result_file = os.path.join(path, result_file)
-    return result_file
-
-
-@contextmanager
-def temp_open(filename, mode):
-    f = open(filename, mode)
-    try:
-        yield f
-    finally:
-        f.close()
-        if os.path.exists(filename):
-            os.remove(filename)
 
 
 def parse_args():

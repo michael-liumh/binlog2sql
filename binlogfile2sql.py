@@ -9,11 +9,12 @@ import pymysql
 import re
 from utils.binlogfile2sql_util import command_line_args, BinLogFileReader
 from utils.binlog2sql_util import concat_sql_from_binlog_event, is_dml_event, event_type, logger, set_log_format, \
-    get_gtid_set, is_want_gtid, save_result_sql, dt_now, create_unique_file, temp_open, handle_rollback_sql, \
+    get_gtid_set, is_want_gtid, save_result_sql, dt_now, handle_rollback_sql, \
     get_max_gtid, remove_max_gtid
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent, GtidEvent
 from utils.sort_binlog2sql_result_utils import check_dir_if_empty
-from utils.other_utils import get_binlog_file_list, timestamp_to_datetime, save_executed_result, split_condition
+from utils.other_utils import create_unique_file, temp_open, get_binlog_file_list, timestamp_to_datetime, \
+    save_executed_result, split_condition
 
 sep = '/' if '/' in sys.argv[0] else os.sep
 
