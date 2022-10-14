@@ -10,9 +10,8 @@ import re
 from utils.binlogfile2sql_util import command_line_args, BinLogFileReader
 from utils.binlog2sql_util import concat_sql_from_binlog_event, is_dml_event, event_type, logger, set_log_format, \
     get_gtid_set, is_want_gtid, save_result_sql, dt_now, handle_rollback_sql, \
-    get_max_gtid, remove_max_gtid
+    get_max_gtid, remove_max_gtid, connect2sync_mysql
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent, GtidEvent
-from utils.sort_binlog2sql_result_utils import check_dir_if_empty
 from utils.other_utils import create_unique_file, temp_open, get_binlog_file_list, timestamp_to_datetime, \
     save_executed_result, split_condition
 
@@ -27,7 +26,7 @@ class BinlogFile2sql(object):
                  ignore_databases=None, ignore_tables=None, ignore_columns=None, replace=False,
                  ignore_virtual_columns=False, file_index=0, remove_not_update_col=False, date_prefix=False,
                  include_gtids=None, exclude_gtids=None, update_to_replace=False, no_date=False,
-                 keep_not_update_col: list = None, chunk_size=1000, tmp_dir='tmp', where=None):
+                 keep_not_update_col: list = None, chunk_size=1000, tmp_dir='tmp', where=None, args=None):
         """
         connection_settings: {'host': 127.0.0.1, 'port': 3306, 'user': slave, 'passwd': slave}
         """
@@ -76,16 +75,13 @@ class BinlogFile2sql(object):
         self.f_result_sql_file = ''
         self.chunk_size = chunk_size
         self.tmp_dir = tmp_dir
-        self.init_tmp_dir()
-        self.filter_conditions = split_condition(where) if where is not None else []
+        if not os.path.exists(tmp_dir):
+            os.makedirs(tmp_dir, exist_ok=True)
 
-    def init_tmp_dir(self):
-        if not os.path.exists(self.tmp_dir):
-            os.makedirs(self.tmp_dir, exist_ok=True)
-        while not check_dir_if_empty(self.tmp_dir):
-            self.tmp_dir = os.path.join(self.tmp_dir, 'tmp')
-            if not os.path.exists(self.tmp_dir):
-                os.makedirs(self.tmp_dir, exist_ok=True)
+        self.filter_conditions = split_condition(where) if where is not None else []
+        self.args = args
+        if args.sync:
+            self.rename_db = args.sync_database
 
     def process_binlog(self):
         stream = BinLogFileReader(self.file_path, ctl_connection_settings=self.connection_settings,
@@ -116,10 +112,13 @@ class BinlogFile2sql(object):
         e_start_pos, last_pos = stream.log_pos, stream.log_pos
         tmp_file = create_unique_file('%s.%s' % (self.connection_settings['host'], self.connection_settings['port']))
         tmp_file = os.path.join(self.tmp_dir, tmp_file)
-        if not os.path.exists(self.tmp_dir):
-            os.makedirs(self.tmp_dir, exist_ok=True)
 
+        sync_conn = ''
+        sync_cursor = ''
         with temp_open(tmp_file, "w") as f_tmp, self.connection as cursor:
+            if self.args and self.args.sync:
+                sync_conn = connect2sync_mysql(self.args)
+                sync_cursor = sync_conn.cursor()
             for binlog_event in stream:
                 if not self.stop_never:
                     try:
@@ -186,6 +185,19 @@ class BinlogFile2sql(object):
                                     filename = f'others.{dt_now()}.sql'
                                 result_sql_file = os.path.join(self.result_dir, filename)
                                 save_result_sql(result_sql_file, sql + '\n')
+                            elif sync_cursor:
+                                sync_conn.ping(reconnect=True)
+                                if re.match('USE .*;\n', sql) is not None:
+                                    sql = re.sub('USE .*;\n', '', sql)
+                                try:
+                                    sync_cursor.execute(sql)
+                                except:
+                                    logger.exception(f'Could not execute sql: {sql}')
+                                    logger.error(
+                                        f'Exit at binlog file {stream.log_file} '
+                                        f'start pos {e_start_pos} end pos {binlog_event.packet.log_pos}'
+                                    )
+                                    break
                             else:
                                 print(sql)
                         else:
@@ -196,6 +208,7 @@ class BinlogFile2sql(object):
                                 flashback_warn_flag = 0
                             f_tmp.write(sql + '\n')
                 elif is_dml_event(binlog_event) and event_type(binlog_event) in self.sql_type:
+                    exit_flag = 0
                     for row in binlog_event.rows:
                         if binlog_gtid and gtid_set and not is_want_gtid(self.gtid_set, binlog_gtid):
                             continue
@@ -234,6 +247,18 @@ class BinlogFile2sql(object):
                                         filename = f'others.{dt_now()}.sql'
                                     result_sql_file = os.path.join(self.result_dir, filename)
                                     save_result_sql(result_sql_file, sql + '\n')
+                                elif sync_cursor:
+                                    sync_conn.ping(reconnect=True)
+                                    try:
+                                        sync_cursor.execute(sql)
+                                    except:
+                                        logger.exception(f'Could not execute sql: {sql}')
+                                        logger.error(
+                                            f'Exit at binlog file {stream.log_file} '
+                                            f'start pos {e_start_pos} end pos {binlog_event.packet.log_pos}'
+                                        )
+                                        exit_flag = 1
+                                        break
                                 else:
                                     print(sql)
                             else:
@@ -243,6 +268,9 @@ class BinlogFile2sql(object):
                                         f'process is done, then reverse the order of results to you.')
                                     flashback_warn_flag = 0
                                 f_tmp.write(sql + '\n')
+
+                    if exit_flag == 1:
+                        break
 
                 if not (isinstance(binlog_event, RotateEvent) or isinstance(binlog_event, FormatDescriptionEvent)):
                     last_pos = binlog_event.packet.log_pos
@@ -256,8 +284,12 @@ class BinlogFile2sql(object):
 
             if self.flashback:
                 handle_rollback_sql(self.f_result_sql_file, self.table_per_file, self.date_prefix, self.no_date,
-                                    self.result_dir, tmp_file, self.chunk_size, self.tmp_dir, self.result_file)
-        os.popen(f'rm -rf {self.tmp_dir}')
+                                    self.result_dir, tmp_file, self.chunk_size, self.tmp_dir, self.result_file,
+                                    sync_conn, sync_cursor)
+
+            if sync_cursor:
+                sync_cursor.close()
+                sync_conn.close()
         return True
 
     def __del__(self):
@@ -298,7 +330,7 @@ def main(args):
                 remove_not_update_col=args.remove_not_update_col, no_date=args.no_date,
                 include_gtids=args.include_gtids, exclude_gtids=args.exclude_gtids, tmp_dir=args.tmp_dir,
                 update_to_replace=args.update_to_replace, keep_not_update_col=args.keep_not_update_col,
-                where=args.where
+                where=args.where, args=args,
             )
             r = bin2sql.process_binlog()
             if not args.stop_never:

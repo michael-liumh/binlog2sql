@@ -400,9 +400,15 @@ def command_line_args(args):
         raise ValueError('Incorrect datetime argument')
     if not args.check:
         if not args.password:
-            args.password = getpass.getpass()
+            args.password = getpass.getpass('Password: ')
         else:
             args.password = args.password[0]
+
+        if args.sync:
+            if not args.sync_password:
+                args.sync_password = getpass.getpass('Sync Password: ')
+            else:
+                args.sync_password = args.sync_password[0]
 
     if args.minutes_ago < 1:
         logger.error('Args --minutes-ago must not lower than 1.')

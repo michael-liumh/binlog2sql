@@ -11,6 +11,7 @@ import json
 import logging
 import chardet
 import colorlog
+import pymysql
 from functools import partial
 from pymysqlreplication.event import QueryEvent
 from pymysqlreplication.row_event import (
@@ -197,6 +198,22 @@ def extend_parser(parser, is_binlog_file=False):
                              'default: ${db}.${tb}_${date}.sql')
     result.add_argument('--where', dest='where', type=str, nargs='*',
                         help='filter result by specify conditions.')
+
+    sync_connect_setting = parser.add_argument_group('sync connect setting')
+    sync_connect_setting.add_argument('--sync', dest='sync', action='store_true', default=False,
+                                      help='Enable sync binlog SQL to other instance')
+    sync_connect_setting.add_argument('-sh', '--sync-host', dest='sync_host', type=str,
+                                      help='MySQL Host for sync binlog', default='127.0.0.1')
+    sync_connect_setting.add_argument('-sP', '--sync-port', dest='sync_port', type=int,
+                                      help='MySQL port for sync binlog', default=3306)
+    sync_connect_setting.add_argument('-su', '--sync-user', dest='sync_user', type=str,
+                                      help='MySQL Username for sync binlog', default='root')
+    sync_connect_setting.add_argument('-sp', '--sync-password', dest='sync_password', type=str, nargs='*',
+                                      help='MySQL Password for sync binlog', default='')
+    sync_connect_setting.add_argument('-sd', '--sync-database', dest='sync_database', type=str,
+                                      help='MySQL Database for sync binlog', default='information_schema')
+    sync_connect_setting.add_argument('-sC', '--sync-charset', dest='sync_charset', type=str,
+                                      help='MySQL charset for sync binlog', default='utf8mb4')
     return
 
 
@@ -227,9 +244,15 @@ def command_line_args(args):
             (args.stop_time and not is_valid_datetime(args.stop_time)):
         raise ValueError('Incorrect datetime argument')
     if not args.password:
-        args.password = getpass.getpass()
+        args.password = getpass.getpass('Password: ')
     else:
         args.password = args.password[0]
+
+    if args.sync:
+        if not args.sync_password:
+            args.sync_password = getpass.getpass('Sync Password: ')
+        else:
+            args.sync_password = args.sync_password[0]
 
     if args.result_dir != './' and not os.path.exists(args.result_dir):
         os.makedirs(args.result_dir, exist_ok=True)
@@ -493,7 +516,6 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                          ignore_columns=None, replace=False, insert_ignore=False, ignore_virtual_columns=False,
                          remove_not_update_col=False, return_type=False, update_to_replace=False,
                          keep_not_update_col: list = None, filter_conditions: list = None):
-
     # 检查是否有符合条件的数据：-1 表示默认值，0 表示不符合，1 表示符合
     check_match_flag = -1
 
@@ -600,7 +622,8 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                             db, binlog_event.table,
                             ', '.join(['`%s`=%%s' % x for x in row['before_values'].keys()]),
                             ' AND '.join(map(compare_items, row['after_values'].items())))
-                        values = map(fix_object, list(row['before_values'].values()) + list(row['after_values'].values()))
+                        values = map(fix_object,
+                                     list(row['before_values'].values()) + list(row['after_values'].values()))
                         types = map(
                             fix_object_new, list(row['before_values'].values()) + list(row['after_values'].values())
                         )
@@ -672,7 +695,8 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                             ', '.join(['`%s`=%%s' % k for k in row['after_values'].keys()]),
                             ' AND '.join(map(compare_items, row['before_values'].items()))
                         )
-                        values = map(fix_object, list(row['after_values'].values()) + list(row['before_values'].values()))
+                        values = map(fix_object,
+                                     list(row['after_values'].values()) + list(row['before_values'].values()))
                         types = map(fix_object_new,
                                     list(row['after_values'].values()) + list(row['before_values'].values()))
                     else:
@@ -820,13 +844,13 @@ def get_table_name(sql):
 
 
 def handle_rollback_sql(f_result_sql_file, table_per_file, date_prefix, no_date, result_dir,
-                        src_file, chunk_size, tmp_dir, result_file):
+                        src_file, chunk_size, tmp_dir, result_file, sync_conn=None, sync_cursor=None):
     if f_result_sql_file:
-        reversed_seq(src_file, chunk_size, tmp_dir, result_file, delete_tmp_dir=False)
+        reversed_seq(src_file, chunk_size, tmp_dir, result_file)
     else:
         tmp_file = src_file + '_tmp'
         try:
-            reversed_seq(src_file, chunk_size, tmp_dir, tmp_file, delete_tmp_dir=False)
+            reversed_seq(src_file, chunk_size, tmp_dir, tmp_file)
             if os.path.exists(tmp_file):
                 logger.info('handling...')
                 for line in yield_file(tmp_file, chunk_size=1):
@@ -848,6 +872,15 @@ def handle_rollback_sql(f_result_sql_file, table_per_file, date_prefix, no_date,
                                 filename = f'others.{dt_now()}.sql'
                         result_sql_file = os.path.join(result_dir, filename)
                         save_result_sql(result_sql_file, line)
+                    elif sync_cursor:
+                        sync_conn.ping(reconnect=True)
+                        if re.match('USE .*;\n', line) is not None:
+                            line = re.sub('USE .*;\n', '', line)
+                        try:
+                            sync_cursor.execute(line)
+                        except:
+                            logger.exception(f'Could not execute sql: {line}')
+                            sys.exit(1)
                     else:
                         print(line, end='')
             else:
@@ -856,3 +889,18 @@ def handle_rollback_sql(f_result_sql_file, table_per_file, date_prefix, no_date,
             if os.path.exists(tmp_file):
                 os.remove(tmp_file)
     return
+
+
+def connect2sync_mysql(args):
+    connection = pymysql.connect(
+        host=args.sync_host,
+        port=args.sync_port,
+        user=args.sync_user,
+        password=args.sync_password,
+        db=args.sync_database,
+        charset=args.sync_charset,
+        max_allowed_packet=256 * 1024 * 1024,
+        cursorclass=pymysql.cursors.DictCursor,
+        autocommit=True,
+    )
+    return connection

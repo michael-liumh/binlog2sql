@@ -93,6 +93,13 @@ git与pip的安装问题请自行搜索解决。
 | --check | 检查指定目录下被过滤的 binlog 文件是否符合预期 |
 | --supervisor | 用 supervisor 管理后台解析进程 |
 | --where | 根据指定条件过滤出需要的 SQL，支持同时传入多个条件，但不能将多个条件用一个括号包起来，多个条件直接传入多个参数即可。正确示例：--where 'c1=v1' 'c2=v2'；错误示例：--where 'c1=v1 and c2=v2'；单个条件支持使用 or，如：--where 'deleted_at = 0 or deleted_at is null' |
+| --sync | 开启同步开关 |
+| -sh, --sync-host | 指定要同步的目标实例地址 |
+| -sP, --sync-port | 指定要同步的目标实例端口 |
+| -su, --sync-user | 指定连接到同步目标实例的用户 |
+| -sp, --sync-password | 指定连接到同步目标实例的密码 |
+| -sd, --sync-database | 指定连接到同步目标实例的库名 |
+| -sC, --sync-charset | 指定连接到同步目标实例的字符集 |
 
 测试
 ==============

@@ -6,6 +6,7 @@ import sys
 import colorlog
 import re
 import time
+import uuid
 from datetime import datetime as dt
 from contextlib import contextmanager
 
@@ -36,14 +37,14 @@ logger.addHandler(console_handler)
 
 
 def create_unique_file(filename, path=None):
-    version = 0
-    result_file = filename
+    result_file = filename + '_' + str(uuid.uuid4())
+    # version = 0
     # if we have to try more than 1000 times, something is seriously wrong
-    while os.path.exists(result_file) and version < 1000:
-        result_file = filename + '.' + str(version)
-        version += 1
-    if version >= 1000:
-        raise OSError('cannot create unique file %s.[0-1000]' % filename)
+    # while os.path.exists(result_file) and version < 1000:
+    #     result_file = filename + '.' + str(version)
+    #     version += 1
+    # if version >= 1000:
+    #     raise OSError('cannot create unique file %s.[0-1000]' % filename)
     if path:
         result_file = os.path.join(path, result_file)
     return result_file

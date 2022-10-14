@@ -155,6 +155,21 @@ def get_file_line_count(filename):
     return int(os.popen(command).read())
 
 
+def init_tmp_dir(tmp_dir):
+    version = 0
+    max_depth = 100
+    if not os.path.exists(tmp_dir):
+        os.makedirs(tmp_dir, exist_ok=True)
+    while not check_dir_if_empty(tmp_dir) and version < max_depth:
+        tmp_dir = os.path.join(tmp_dir, 'tmp')
+        if not os.path.exists(tmp_dir):
+            os.makedirs(tmp_dir, exist_ok=True)
+        version += 1
+    if version >= max_depth:
+        raise OSError(f'Create too many tmp dirs.')
+    return tmp_dir
+
+
 def reversed_seq(src_file, chunk_size, tmp_dir, dst_file, encoding='utf8', delete_tmp_dir=True):
     file_line_count = get_file_line_count(src_file)
     if file_line_count == 0:
@@ -164,6 +179,7 @@ def reversed_seq(src_file, chunk_size, tmp_dir, dst_file, encoding='utf8', delet
     total_part = file_line_count // chunk_size + 1
     try:
         record_list = []
+        tmp_dir = init_tmp_dir(tmp_dir)
         for i, file_lines in track(enumerate(yield_file(src_file, encoding, chunk_size)),
                                    total=total_part, description='reversing...'):
             tmp_filepath = os.path.join(tmp_dir, str(uuid.uuid4()))
