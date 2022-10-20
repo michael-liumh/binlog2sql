@@ -114,3 +114,6 @@ TODO
 - [x] 修复 binlogfile2sql json 数据解析处理的SQL执行不了的 bug
 - [x] 修复 binlogfile2sql start-position 参数不生效的 bug
 - [x] 添加 GTID 支持
+- [x] 添加条件过滤功能，参数：--where
+- [x] 添加数据同步支持：参数：--sync
+- [ ] 添加数据转换支持，将 SQL 转换成 CSV
