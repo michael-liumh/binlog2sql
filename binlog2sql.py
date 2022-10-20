@@ -59,7 +59,7 @@ class Binlog2sql(object):
         self.only_pk = only_pk
         self.ignore_databases = ignore_databases
         self.ignore_tables = ignore_tables
-        self.ignore_columns = ignore_columns
+        self.ignore_columns = ignore_columns if ignore_columns is not None else []
         self.replace = replace
         self.insert_ignore = insert_ignore
         self.remove_not_update_col = remove_not_update_col
@@ -70,7 +70,7 @@ class Binlog2sql(object):
         self.gtid_set = get_gtid_set(include_gtids, exclude_gtids)
         self.gtid_max_dict = get_max_gtid(self.gtid_set.get('include', {}))
         self.update_to_replace = update_to_replace
-        self.keep_not_update_col = keep_not_update_col
+        self.keep_not_update_col = keep_not_update_col if keep_not_update_col is not None else []
         self.no_date = no_date
         self.f_result_sql_file = ''
         self.chunk_size = chunk_size
@@ -79,6 +79,18 @@ class Binlog2sql(object):
             os.makedirs(tmp_dir, exist_ok=True)
 
         self.filter_conditions = split_condition(where) if where is not None else []
+        if remove_not_update_col and self.filter_conditions:
+            for cond_elem in self.filter_conditions:
+                if isinstance(cond_elem, dict):
+                    cond_column = cond_elem['column']
+                    if cond_column not in self.keep_not_update_col and cond_column not in self.ignore_columns:
+                        self.keep_not_update_col.append(cond_column)
+                elif isinstance(cond_elem, tuple):
+                    for cond in cond_elem:
+                        cond_column = cond['column']
+                        if cond_column not in self.keep_not_update_col and cond_column not in self.ignore_columns:
+                            self.keep_not_update_col.append(cond_column)
+
         self.args = args
         if args.sync:
             self.rename_db = args.sync_database
