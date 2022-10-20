@@ -95,7 +95,8 @@ class BinlogFile2sql(object):
         if args.sync:
             self.rename_db = args.sync_database
         if self.rename_db and not self.only_dml:
-            logger.error(f'args --rename-db and --sync-database only work for DML SQL.')
+            logger.error(f'args --rename-db and --sync-database only work for DML SQL. '
+                         f'We suggest you add --only-dml args.')
             choice = input('Do you want to continue anyway? y/[n]: ')
             if choice != 'y':
                 sys.exit(1)
