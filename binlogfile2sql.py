@@ -13,7 +13,7 @@ from utils.binlog2sql_util import concat_sql_from_binlog_event, is_dml_event, ev
     get_max_gtid, remove_max_gtid, connect2sync_mysql
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent, GtidEvent
 from utils.other_utils import create_unique_file, temp_open, get_binlog_file_list, timestamp_to_datetime, \
-    save_executed_result, split_condition
+    save_executed_result, split_condition, merge_rename_dbs
 
 sep = '/' if '/' in sys.argv[0] else os.sep
 
@@ -54,7 +54,7 @@ class BinlogFile2sql(object):
 
         self.result_dir = result_dir
         self.need_comment = need_comment
-        self.rename_db = rename_db
+        self.rename_db_dict = merge_rename_dbs(rename_db) if rename_db else dict()
         self.only_pk = only_pk
         self.result_file = result_file
         self.table_per_file = table_per_file
@@ -92,14 +92,6 @@ class BinlogFile2sql(object):
                             self.keep_not_update_col.append(cond_column)
 
         self.args = args
-        if args.sync:
-            self.rename_db = args.sync_database
-        if self.rename_db and not self.only_dml:
-            logger.error(f'args --rename-db and --sync-database only work for DML SQL. '
-                         f'We suggest you add --only-dml args.')
-            choice = input('Do you want to continue anyway? y/[n]: ')
-            if choice != 'y':
-                sys.exit(1)
 
     def process_binlog(self):
         stream = BinLogFileReader(self.file_path, ctl_connection_settings=self.connection_settings,
@@ -172,7 +164,7 @@ class BinlogFile2sql(object):
 
                     sql, db, table = concat_sql_from_binlog_event(
                         cursor=cursor, binlog_event=binlog_event, flashback=self.flashback, no_pk=self.no_pk,
-                        rename_db=self.rename_db, only_pk=self.only_pk, only_return_sql=False,
+                        rename_db_dict=self.rename_db_dict, only_pk=self.only_pk, only_return_sql=False,
                         ignore_columns=self.ignore_columns, replace=self.replace, insert_ignore=self.insert_ignore,
                         ignore_virtual_columns=self.ignore_virtual_columns, binlog_gtid=binlog_gtid,
                         remove_not_update_col=self.remove_not_update_col, update_to_replace=self.update_to_replace,
@@ -233,12 +225,12 @@ class BinlogFile2sql(object):
 
                         sql, db, table = concat_sql_from_binlog_event(
                             cursor=cursor, binlog_event=binlog_event, row=row, flashback=self.flashback,
-                            e_start_pos=e_start_pos, rename_db=self.rename_db, only_pk=self.only_pk, no_pk=self.no_pk,
+                            e_start_pos=e_start_pos, rename_db_dict=self.rename_db_dict, only_pk=self.only_pk,
                             only_return_sql=False, ignore_columns=self.ignore_columns, replace=self.replace,
                             insert_ignore=self.insert_ignore, ignore_virtual_columns=self.ignore_virtual_columns,
                             remove_not_update_col=self.remove_not_update_col, binlog_gtid=binlog_gtid,
                             update_to_replace=self.update_to_replace, keep_not_update_col=self.keep_not_update_col,
-                            filter_conditions=self.filter_conditions,
+                            filter_conditions=self.filter_conditions, no_pk=self.no_pk,
                         )
                         if sql:
                             if self.need_comment != 1:
@@ -327,6 +319,15 @@ def main(args):
         logger.error('No file select.')
         if not args.supervisor:
             sys.exit(1)
+
+    if args.sync:
+        args.rename_db = [args.sync_database]
+    if args.rename_db and not args.only_dml:
+        logger.error(f'args --rename-db only work with DML SQL. '
+                     f'We suggest you add --only-dml args.')
+        choice = input('Do you want to add --only-dml args? [y]/n: ')
+        if choice in ['y', '']:
+            args.only_dml = True
 
     while True:
         for i, binlog_file in enumerate(binlog_file_list):

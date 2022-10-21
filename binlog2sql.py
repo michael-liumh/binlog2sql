@@ -10,7 +10,7 @@ from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionE
 from utils.binlog2sql_util import command_line_args, concat_sql_from_binlog_event, is_dml_event, event_type, logger, \
     set_log_format, get_gtid_set, is_want_gtid, save_result_sql, dt_now, handle_rollback_sql, get_max_gtid, \
     remove_max_gtid, connect2sync_mysql
-from utils.other_utils import create_unique_file, temp_open, split_condition
+from utils.other_utils import create_unique_file, temp_open, split_condition, merge_rename_dbs
 
 sep = '/' if '/' in sys.argv[0] else os.sep
 
@@ -55,7 +55,7 @@ class Binlog2sql(object):
         self.binlogList = []
         self.connection = pymysql.connect(**self.conn_setting)
         self.need_comment = need_comment
-        self.rename_db = rename_db
+        self.rename_db_dict = merge_rename_dbs(rename_db) if rename_db else dict()
         self.only_pk = only_pk
         self.ignore_databases = ignore_databases
         self.ignore_tables = ignore_tables
@@ -93,13 +93,13 @@ class Binlog2sql(object):
 
         self.args = args
         if args.sync:
-            self.rename_db = args.sync_database
-        if self.rename_db and not self.only_dml:
-            logger.error(f'args --rename-db and --sync-database only work for DML SQL. '
+            self.rename_db_dict = {"*": args.sync_database}
+        if self.rename_db_dict and not self.only_dml:
+            logger.error(f'args --rename-db only work with DML SQL. '
                          f'We suggest you add --only-dml args.')
-            choice = input('Do you want to continue anyway? y/[n]: ')
-            if choice != 'y':
-                sys.exit(1)
+            choice = input('Do you want to add --only-dml args? [y]/n: ')
+            if choice in ['y', '']:
+                self.only_dml = True
 
         with self.connection as cursor:
             cursor.execute("SHOW MASTER STATUS")
@@ -200,7 +200,7 @@ class Binlog2sql(object):
 
                     sql, db, table = concat_sql_from_binlog_event(
                         cursor=cursor, binlog_event=binlog_event, only_return_sql=False,
-                        flashback=self.flashback, no_pk=self.no_pk, rename_db=self.rename_db, only_pk=self.only_pk,
+                        flashback=self.flashback, no_pk=self.no_pk, rename_db_dict=self.rename_db_dict, only_pk=self.only_pk,
                         ignore_columns=self.ignore_columns, replace=self.replace, insert_ignore=self.insert_ignore,
                         remove_not_update_col=self.remove_not_update_col, binlog_gtid=binlog_gtid,
                         update_to_replace=self.update_to_replace, keep_not_update_col=self.keep_not_update_col,
@@ -259,7 +259,7 @@ class Binlog2sql(object):
 
                         sql, db, table = concat_sql_from_binlog_event(
                             cursor=cursor, binlog_event=binlog_event, no_pk=self.no_pk, row=row,
-                            flashback=self.flashback, e_start_pos=e_start_pos, rename_db=self.rename_db,
+                            flashback=self.flashback, e_start_pos=e_start_pos, rename_db_dict=self.rename_db_dict,
                             only_pk=self.only_pk, ignore_columns=self.ignore_columns, replace=self.replace,
                             insert_ignore=self.insert_ignore, remove_not_update_col=self.remove_not_update_col,
                             only_return_sql=False, binlog_gtid=binlog_gtid, update_to_replace=self.update_to_replace,

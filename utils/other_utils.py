@@ -260,3 +260,17 @@ def split_condition(src_conditions):
                 parse_split_condition(cond, condition_list_tmp)
             condition_list.append(tuple(condition_list_tmp))
     return condition_list
+
+
+def merge_rename_dbs(rename_db_list: list):
+    rename_db_dict = dict()
+    for rename_db in rename_db_list:
+        rename_db_split = rename_db.split()
+        if len(rename_db_split) > 1:
+            old_db = rename_db_split[0]
+            new_db = rename_db_split[1]
+        else:
+            old_db = "*"
+            new_db = rename_db_split[0]
+        rename_db_dict[old_db] = new_db
+    return rename_db_dict
