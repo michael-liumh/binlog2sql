@@ -10,7 +10,7 @@ from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionE
 from utils.binlog2sql_util import command_line_args, concat_sql_from_binlog_event, is_dml_event, event_type, logger, \
     set_log_format, get_gtid_set, is_want_gtid, save_result_sql, dt_now, handle_rollback_sql, get_max_gtid, \
     remove_max_gtid, connect2sync_mysql
-from utils.other_utils import create_unique_file, temp_open, split_condition, merge_rename_dbs
+from utils.other_utils import create_unique_file, temp_open, split_condition, merge_rename_args
 
 sep = '/' if '/' in sys.argv[0] else os.sep
 
@@ -19,7 +19,7 @@ class Binlog2sql(object):
 
     def __init__(self, connection_settings, start_file=None, start_pos=None, end_file=None, end_pos=None,
                  start_time=None, stop_time=None, only_schemas=None, only_tables=None, no_pk=False,
-                 flashback=False, stop_never=False, only_dml=True, sql_type=None,
+                 flashback=False, stop_never=False, only_dml=True, sql_type=None, rename_tb=None,
                  need_comment=1, rename_db=None, only_pk=False, ignore_databases=None, ignore_tables=None,
                  ignore_columns=None, replace=False, insert_ignore=False, remove_not_update_col=False,
                  result_file=None, result_dir=None, table_per_file=False, date_prefix=False,
@@ -55,7 +55,8 @@ class Binlog2sql(object):
         self.binlogList = []
         self.connection = pymysql.connect(**self.conn_setting)
         self.need_comment = need_comment
-        self.rename_db_dict = merge_rename_dbs(rename_db) if rename_db else dict()
+        self.rename_db_dict = merge_rename_args(rename_db) if rename_db else dict()
+        self.rename_tb_dict = merge_rename_args(rename_tb) if rename_tb else dict()
         self.only_pk = only_pk
         self.ignore_databases = ignore_databases
         self.ignore_tables = ignore_tables
@@ -204,7 +205,7 @@ class Binlog2sql(object):
                         ignore_columns=self.ignore_columns, replace=self.replace, insert_ignore=self.insert_ignore,
                         remove_not_update_col=self.remove_not_update_col, binlog_gtid=binlog_gtid,
                         update_to_replace=self.update_to_replace, keep_not_update_col=self.keep_not_update_col,
-                        filter_conditions=self.filter_conditions,
+                        filter_conditions=self.filter_conditions, rename_tb_dict=self.rename_tb_dict,
                     )
                     if sql:
                         if self.need_comment != 1:
@@ -264,6 +265,7 @@ class Binlog2sql(object):
                             insert_ignore=self.insert_ignore, remove_not_update_col=self.remove_not_update_col,
                             only_return_sql=False, binlog_gtid=binlog_gtid, update_to_replace=self.update_to_replace,
                             keep_not_update_col=self.keep_not_update_col, filter_conditions=self.filter_conditions,
+                            rename_tb_dict=self.rename_tb_dict,
                         )
                         try:
                             if sql:
@@ -358,7 +360,7 @@ def main(args):
         stop_time=args.stop_time, only_schemas=args.databases, only_tables=args.tables,
         no_pk=args.no_pk, flashback=args.flashback, stop_never=args.stop_never,
         only_dml=args.only_dml, sql_type=args.sql_type, no_date=args.no_date,
-        need_comment=args.need_comment, rename_db=args.rename_db, only_pk=args.only_pk,
+        need_comment=args.need_comment, rename_db=args.rename_db, only_pk=args.only_pk, rename_tb=args.rename_tb,
         ignore_databases=args.ignore_databases, ignore_tables=args.ignore_tables,
         ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore,
         remove_not_update_col=args.remove_not_update_col, table_per_file=args.table_per_file,

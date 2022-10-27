@@ -174,7 +174,9 @@ def extend_parser(parser, is_binlog_file=False):
                         help='Choice need comment like [#start 268435860 end 268436724 time 2021-12-01 16:40:16] '
                              'or not, 0 means not need, 1 means need')
     result.add_argument('--rename-db', dest='rename_db', type=str, nargs='*',
-                        help='Rename source dbs to target db. Format: "old_db new_db" or "new_db" ')
+                        help='Rename source dbs to target db. Format: "old_database new_database" or "new_database" ')
+    result.add_argument('--rename-tb', dest='rename_tb', type=str, nargs='*',
+                        help='Rename source tbs to target tbs. Format: "old_table new_table" or "new_table" ')
     result.add_argument('--remove-not-update-col', dest='remove_not_update_col', action='store_true', default=False,
                         help='If set, we will remove not update column in update statements (exclude primary key)')
     result.add_argument('--keep', '--keep-not-update-col', dest='keep_not_update_col', type=str, nargs='*',
@@ -406,8 +408,8 @@ def fix_hex_values(sql: str, values: list, types: list):
 
 
 def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=None, flashback=False, no_pk=False,
-                                 rename_db_dict=None, only_pk=False, only_return_sql=True, ignore_columns=None,
-                                 replace=False, insert_ignore=False, ignore_virtual_columns=False,
+                                 rename_db_dict=None, rename_tb_dict=None, only_pk=False, only_return_sql=True,
+                                 ignore_columns=None, replace=False, insert_ignore=False, ignore_virtual_columns=False,
                                  remove_not_update_col=False, binlog_gtid=None, update_to_replace=False,
                                  keep_not_update_col: list = None, filter_conditions: list = None):
     if flashback and no_pk:
@@ -427,7 +429,7 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
             ignore_columns=ignore_columns, replace=replace, insert_ignore=insert_ignore, return_type=True,
             ignore_virtual_columns=ignore_virtual_columns, remove_not_update_col=remove_not_update_col,
             update_to_replace=update_to_replace, keep_not_update_col=keep_not_update_col,
-            filter_conditions=filter_conditions,
+            filter_conditions=filter_conditions, rename_tb_dict=rename_tb_dict,
         )
 
         if pattern['values']:
@@ -516,10 +518,10 @@ def check_condition_match_row(filter_conditions, values, check_match_flag):
     return check_match_flag
 
 
-def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, rename_db_dict=None, only_pk=False,
-                         ignore_columns=None, replace=False, insert_ignore=False, ignore_virtual_columns=False,
-                         remove_not_update_col=False, return_type=False, update_to_replace=False,
-                         keep_not_update_col: list = None, filter_conditions: list = None):
+def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, rename_db_dict=None, rename_tb_dict=None,
+                         only_pk=False, ignore_columns=None, replace=False, insert_ignore=False,
+                         ignore_virtual_columns=False, remove_not_update_col=False, return_type=False,
+                         update_to_replace=False, keep_not_update_col: list = None, filter_conditions: list = None):
     # 检查是否有符合条件的数据：-1 表示默认值，0 表示不符合，1 表示符合
     check_match_flag = -1
 
@@ -577,13 +579,18 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
 
     if check_match_flag in [-1, 1]:
         specified_rename_db = rename_db_dict.get(binlog_event.schema) if rename_db_dict else ''
-        default_rename_db = rename_db_dict.get('*') if rename_db_dict else binlog_event.schema
+        default_rename_db = rename_db_dict.get('*') if rename_db_dict and '*' in rename_db_dict else binlog_event.schema
         db = specified_rename_db if specified_rename_db else default_rename_db
+
+        specified_rename_tb = rename_tb_dict.get(binlog_event.table) if rename_tb_dict else ''
+        default_rename_tb = rename_tb_dict.get('*') if rename_tb_dict and '*' in rename_tb_dict else binlog_event.table
+        tb = specified_rename_tb if specified_rename_tb else default_rename_tb
+
         if flashback is True:
             if isinstance(binlog_event, WriteRowsEvent):
                 if not only_pk:
                     template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
-                        db, binlog_event.table,
+                        db, tb,
                         ' AND '.join(map(compare_items, row['values'].items()))
                     )
                     values = map(fix_object, row['values'].values())
@@ -593,7 +600,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                         binlog_event.primary_key: row['values'].get(binlog_event.primary_key)
                     }
                     template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
-                        db, binlog_event.table,
+                        db, tb,
                         ' AND '.join(map(compare_items, pk_item.items()))
                     )
                     values = map(fix_object, pk_item.values())
@@ -601,19 +608,19 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
             elif isinstance(binlog_event, DeleteRowsEvent):
                 if replace:
                     template = 'REPLACE INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
-                        db, binlog_event.table,
+                        db, tb,
                         ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
                         ', '.join(['%s'] * len(row['values']))
                     )
                 elif insert_ignore:
                     template = 'INSERT IGNORE INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
-                        db, binlog_event.table,
+                        db, tb,
                         ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
                         ', '.join(['%s'] * len(row['values']))
                     )
                 else:
                     template = 'INSERT INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
-                        db, binlog_event.table,
+                        db, tb,
                         ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
                         ', '.join(['%s'] * len(row['values']))
                     )
@@ -623,7 +630,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                 if not update_to_replace:
                     if not only_pk:
                         template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
-                            db, binlog_event.table,
+                            db, tb,
                             ', '.join(['`%s`=%%s' % x for x in row['before_values'].keys()]),
                             ' AND '.join(map(compare_items, row['after_values'].items())))
                         values = map(fix_object,
@@ -636,14 +643,14 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                             binlog_event.primary_key: row['after_values'].get(binlog_event.primary_key)
                         }
                         template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
-                            db, binlog_event.table,
+                            db, tb,
                             ', '.join(['`%s`=%%s' % x for x in row['before_values'].keys()]),
                             ' AND '.join(map(compare_items, pk_item.items())))
                         values = map(fix_object, list(row['before_values'].values()) + list(pk_item.values()))
                         types = map(fix_object_new, list(row['before_values'].values()) + list(pk_item.values()))
                 else:
                     template = 'REPLACE INTO `{0}`.`{1}` SET {2};'.format(
-                        db, binlog_event.table,
+                        db, tb,
                         ', '.join(['`%s`=%%s' % x for x in row['before_values'].keys()]))
                     values = map(fix_object, list(row['before_values'].values()))
                     types = map(fix_object_new, list(row['before_values'].values()))
@@ -655,20 +662,20 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
 
                 if replace:
                     template = 'REPLACE INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
-                        db, binlog_event.table,
+                        db, tb,
                         ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
                         ', '.join(['%s'] * len(row['values']))
                     )
 
                 elif insert_ignore:
                     template = 'INSERT IGNORE INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
-                        db, binlog_event.table,
+                        db, tb,
                         ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
                         ', '.join(['%s'] * len(row['values']))
                     )
                 else:
                     template = 'INSERT INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
-                        db, binlog_event.table,
+                        db, tb,
                         ', '.join(map(lambda key: '`%s`' % key, row['values'].keys())),
                         ', '.join(['%s'] * len(row['values']))
                     )
@@ -677,7 +684,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
             elif isinstance(binlog_event, DeleteRowsEvent):
                 if not only_pk:
                     template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
-                        db, binlog_event.table, ' AND '.join(map(compare_items, row['values'].items())))
+                        db, tb, ' AND '.join(map(compare_items, row['values'].items())))
                     values = map(fix_object, row['values'].values())
                     types = map(fix_object_new, row['values'].values())
                 else:
@@ -685,14 +692,14 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                         binlog_event.primary_key: row['values'].get(binlog_event.primary_key)
                     }
                     template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
-                        db, binlog_event.table, ' AND '.join(map(compare_items, pk_item.items())))
+                        db, tb, ' AND '.join(map(compare_items, pk_item.items())))
                     values = map(fix_object, pk_item.values())
                     types = map(fix_object_new, pk_item.values())
             elif isinstance(binlog_event, UpdateRowsEvent):
                 if not update_to_replace:
                     if not only_pk:
                         template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
-                            db, binlog_event.table,
+                            db, tb,
                             ', '.join(['`%s`=%%s' % k for k in row['after_values'].keys()]),
                             ' AND '.join(map(compare_items, row['before_values'].items()))
                         )
@@ -705,7 +712,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                             binlog_event.primary_key: row['before_values'].get(binlog_event.primary_key)
                         }
                         template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
-                            db, binlog_event.table,
+                            db, tb,
                             ', '.join(['`%s`=%%s' % k for k in row['after_values'].keys()]),
                             ' AND '.join(map(compare_items, pk_item.items()))
                         )
@@ -713,7 +720,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                         types = map(fix_object_new, list(row['after_values'].values()) + list(pk_item.values()))
                 else:
                     template = 'REPLACE INTO `{0}`.`{1}` SET {2};'.format(
-                        db, binlog_event.table,
+                        db, tb,
                         ', '.join(['`%s`=%%s' % k for k in row['after_values'].keys()])
                     )
                     values = map(fix_object, list(row['after_values'].values()))

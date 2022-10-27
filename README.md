@@ -83,7 +83,8 @@ git与pip的安装问题请自行搜索解决。
 | --date-prefix | 当使用 --table-per-file 参数解析本地 binlog 时，输出的结果将按《日期.库名.表名.sql》的格式保存到对应的文件中 |
 | -ma, --minutes-ago | 当解析本地 binlog 时，只解析最后修改时间在 n 分钟前的文件（可用这个参数排除还没记录完的 binlog，不想排除的话，直接参数值为 0 即可） |
 | --need-comment | 选择输出的 SQL 是否需要保留注释，注释内容包括这条 SQL 在 binlog 中的起始位点、结束位点、gtid值，值为 1 表示保留（默认），0 表示不保留 |
-| --rename-db | 选择将输出的 SQL 的库名统一改成指定的库名（方便将多个库同一个表的 SQL 整合到一个库中进行后续的分析） |
+| --rename-db | 选择将输出的 SQL 的库名进行重命名，格式：“旧库名 新库名” 或者 “新库名”，只提供新库名的话，会将未提供旧库名的其它所有库名全部重命名成指定库名，因此，无特殊需求的情况下，请不要只提供新库名 |
+| --rename-tb | 选择将输出的 SQL 的表名进行重命名，格式：“旧表名 新表名” 或者 “新表名”，只提供新表名的话，会将未提供旧表名的其它所有表名全部重命名成指定表名，因此，无特殊需求的情况下，请不要只提供新表名 |
 | --remove-not-update-col | 排除 UPDATE 语句中未被更新的字段（默认输出完整的更新前后的值） |
 | --keep, --keep-not-update-col | 当使用--remove-not-update-col参数来排除 UPDATE 语句中未被更新的字段时，会保留一些没更新的，但你想保留的字段，多个字段用空格分隔。示例：--remove-not-update-col --keep id col1 col2 |
 | --update-to-replace | 将 UPDATE 语句转化成 REPLACE INTO 语句 |

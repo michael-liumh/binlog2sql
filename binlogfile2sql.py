@@ -13,7 +13,7 @@ from utils.binlog2sql_util import concat_sql_from_binlog_event, is_dml_event, ev
     get_max_gtid, remove_max_gtid, connect2sync_mysql
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent, GtidEvent
 from utils.other_utils import create_unique_file, temp_open, get_binlog_file_list, timestamp_to_datetime, \
-    save_executed_result, split_condition, merge_rename_dbs
+    save_executed_result, split_condition, merge_rename_args
 
 sep = '/' if '/' in sys.argv[0] else os.sep
 
@@ -23,7 +23,7 @@ class BinlogFile2sql(object):
                  start_time=None, stop_time=None, only_schemas=None, only_tables=None, no_pk=False,
                  flashback=False, stop_never=False, only_dml=True, sql_type=None, result_dir=None, need_comment=1,
                  rename_db=None, only_pk=False, result_file=None, table_per_file=False, insert_ignore=False,
-                 ignore_databases=None, ignore_tables=None, ignore_columns=None, replace=False,
+                 ignore_databases=None, ignore_tables=None, ignore_columns=None, replace=False, rename_tb=None,
                  ignore_virtual_columns=False, file_index=0, remove_not_update_col=False, date_prefix=False,
                  include_gtids=None, exclude_gtids=None, update_to_replace=False, no_date=False,
                  keep_not_update_col: list = None, chunk_size=1000, tmp_dir='tmp', where=None, args=None):
@@ -54,7 +54,8 @@ class BinlogFile2sql(object):
 
         self.result_dir = result_dir
         self.need_comment = need_comment
-        self.rename_db_dict = merge_rename_dbs(rename_db) if rename_db else dict()
+        self.rename_db_dict = merge_rename_args(rename_db) if rename_db else dict()
+        self.rename_tb_dict = merge_rename_args(rename_tb) if rename_tb else dict()
         self.only_pk = only_pk
         self.result_file = result_file
         self.table_per_file = table_per_file
@@ -169,6 +170,7 @@ class BinlogFile2sql(object):
                         ignore_virtual_columns=self.ignore_virtual_columns, binlog_gtid=binlog_gtid,
                         remove_not_update_col=self.remove_not_update_col, update_to_replace=self.update_to_replace,
                         keep_not_update_col=self.keep_not_update_col, filter_conditions=self.filter_conditions,
+                        rename_tb_dict=self.rename_tb_dict,
                     )
                     if sql:
                         if self.need_comment != 1:
@@ -231,6 +233,7 @@ class BinlogFile2sql(object):
                             remove_not_update_col=self.remove_not_update_col, binlog_gtid=binlog_gtid,
                             update_to_replace=self.update_to_replace, keep_not_update_col=self.keep_not_update_col,
                             filter_conditions=self.filter_conditions, no_pk=self.no_pk,
+                            rename_tb_dict=self.rename_tb_dict,
                         )
                         if sql:
                             if self.need_comment != 1:
@@ -343,7 +346,7 @@ def main(args):
                 flashback=args.flashback, only_dml=args.only_dml, sql_type=args.sql_type, file_index=i,
                 stop_never=args.stop_never, need_comment=args.need_comment, rename_db=args.rename_db,
                 only_pk=args.only_pk, result_file=args.result_file, table_per_file=args.table_per_file,
-                ignore_databases=args.ignore_databases, ignore_tables=args.ignore_tables,
+                ignore_databases=args.ignore_databases, ignore_tables=args.ignore_tables, rename_tb=args.rename_tb,
                 ignore_columns=args.ignore_columns, replace=args.replace, insert_ignore=args.insert_ignore,
                 ignore_virtual_columns=args.ignore_virtual_columns, date_prefix=args.date_prefix,
                 remove_not_update_col=args.remove_not_update_col, no_date=args.no_date,

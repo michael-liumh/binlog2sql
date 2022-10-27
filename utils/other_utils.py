@@ -262,15 +262,15 @@ def split_condition(src_conditions):
     return condition_list
 
 
-def merge_rename_dbs(rename_db_list: list):
-    rename_db_dict = dict()
-    for rename_db in rename_db_list:
-        rename_db_split = rename_db.split()
-        if len(rename_db_split) > 1:
-            old_db = rename_db_split[0]
-            new_db = rename_db_split[1]
+def merge_rename_args(rename_args_list: list):
+    rename_args_dict = dict()
+    for rename_arg in rename_args_list:
+        rename_arg_split = rename_arg.split()
+        if len(rename_arg_split) > 1:
+            old_arg = rename_arg_split[0]
+            new_arg = rename_arg_split[1]
         else:
-            old_db = "*"
-            new_db = rename_db_split[0]
-        rename_db_dict[old_db] = new_db
-    return rename_db_dict
+            old_arg = "*"
+            new_arg = rename_arg_split[0]
+        rename_args_dict[old_arg] = new_arg
+    return rename_args_dict
