@@ -518,6 +518,15 @@ def check_condition_match_row(filter_conditions, values, check_match_flag):
     return check_match_flag
 
 
+def get_pk_item(binlog_event, values):
+    primary_keys = binlog_event.primary_key
+    if not isinstance(primary_keys, tuple):
+        primary_keys = (primary_keys, )
+    return {
+        i: values.get(i) for i in primary_keys
+    }
+
+
 def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, rename_db_dict=None, rename_tb_dict=None,
                          only_pk=False, ignore_columns=None, replace=False, insert_ignore=False,
                          ignore_virtual_columns=False, remove_not_update_col=False, return_type=False,
@@ -563,6 +572,8 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
             if old_v == new_v:
                 if k == binlog_event.primary_key:
                     row['after_values'].pop(k)
+                elif isinstance(binlog_event.primary_key, tuple) and k in binlog_event.primary_key:
+                    row['after_values'].pop(k)
                 elif keep_not_update_col and k in keep_not_update_col:
                     # row['after_values'].pop(k)
                     continue
@@ -596,9 +607,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                     values = map(fix_object, row['values'].values())
                     types = map(fix_object_new, row['values'].values())
                 else:
-                    pk_item = {
-                        binlog_event.primary_key: row['values'].get(binlog_event.primary_key)
-                    }
+                    pk_item = get_pk_item(binlog_event, row["values"])
                     template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
                         db, tb,
                         ' AND '.join(map(compare_items, pk_item.items()))
@@ -639,9 +648,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                             fix_object_new, list(row['before_values'].values()) + list(row['after_values'].values())
                         )
                     else:
-                        pk_item = {
-                            binlog_event.primary_key: row['after_values'].get(binlog_event.primary_key)
-                        }
+                        pk_item = get_pk_item(binlog_event, row["after_values"])
                         template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
                             db, tb,
                             ', '.join(['`%s`=%%s' % x for x in row['before_values'].keys()]),
@@ -658,7 +665,11 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
             if isinstance(binlog_event, WriteRowsEvent):
                 if no_pk:
                     if binlog_event.primary_key:
-                        row['values'].pop(binlog_event.primary_key)
+                        if isinstance(binlog_event.primary_key, tuple):
+                            for key in binlog_event.primary_key:
+                                row['values'].pop(key)
+                        else:
+                            row['values'].pop(binlog_event.primary_key)
 
                 if replace:
                     template = 'REPLACE INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
@@ -688,9 +699,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                     values = map(fix_object, row['values'].values())
                     types = map(fix_object_new, row['values'].values())
                 else:
-                    pk_item = {
-                        binlog_event.primary_key: row['values'].get(binlog_event.primary_key)
-                    }
+                    pk_item = get_pk_item(binlog_event, row["values"])
                     template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
                         db, tb, ' AND '.join(map(compare_items, pk_item.items())))
                     values = map(fix_object, pk_item.values())
@@ -708,9 +717,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                         types = map(fix_object_new,
                                     list(row['after_values'].values()) + list(row['before_values'].values()))
                     else:
-                        pk_item = {
-                            binlog_event.primary_key: row['before_values'].get(binlog_event.primary_key)
-                        }
+                        pk_item = get_pk_item(binlog_event, row["before_values"])
                         template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
                             db, tb,
                             ', '.join(['`%s`=%%s' % k for k in row['after_values'].keys()]),
