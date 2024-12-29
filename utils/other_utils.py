@@ -1,39 +1,21 @@
 # !/usr/bin/env python3
 # -*- coding:utf8 -*-
-import logging
 import os
 import sys
-import colorlog
 import re
 import time
 import uuid
 from datetime import datetime as dt
 from contextlib import contextmanager
+from loguru import logger
+from pathlib import Path
 
-
-# create a logger
-logger = logging.getLogger('json_utils')
-logger.setLevel(logging.INFO)
-
-# set logger color
-log_colors_config = {
-    'DEBUG': 'bold_purple',
-    'INFO': 'bold_green',
-    'WARNING': 'bold_yellow',
-    'ERROR': 'bold_red',
-    'CRITICAL': 'red',
-}
-
-# set logger format
-console_format = colorlog.ColoredFormatter(
-    "[%(asctime)s] [%(module)s:%(funcName)s] [%(lineno)d] [%(levelname)s] %(log_color)s%(message)s",
-    log_colors=log_colors_config
-)
-
-# add console handler
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(console_format)
-logger.addHandler(console_handler)
+py_file_path = Path(sys.argv[0])
+py_file_pre = py_file_path.parts[-1].replace('.py', '')
+log_file = py_file_path.parent / 'logs' / f'{py_file_pre}.log'
+Path(log_file).parent.mkdir(exist_ok=True, parents=True)
+logger.add(log_file, rotation='100MB', retention=10, compression='zip')
+sep = '/' if '/' in sys.argv[0] else os.sep
 
 
 def create_unique_file(filename, path=None):

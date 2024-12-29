@@ -8,9 +8,7 @@ import argparse
 import datetime
 import getpass
 import json
-import logging
 import chardet
-import colorlog
 import pymysql
 from functools import partial
 from pymysqlreplication.event import QueryEvent
@@ -19,64 +17,13 @@ from pymysqlreplication.row_event import (
     UpdateRowsEvent,
     DeleteRowsEvent,
 )
-
-from utils.other_utils import is_valid_datetime
-from utils.sort_binlog2sql_result_utils import reversed_seq, yield_file
+from .other_utils import is_valid_datetime, logger
+from .sort_binlog2sql_result_utils import reversed_seq, yield_file
 
 if sys.version > '3':
     PY3PLUS = True
 else:
     PY3PLUS = False
-
-# create a logger
-base_dir = os.path.dirname(os.path.abspath(__file__))
-sep = '/' if '/' in sys.argv[0] else os.sep
-logger = logging.getLogger('binlog2sql_utils')
-logger.setLevel(logging.INFO)
-
-# set logger color
-log_colors_config = {
-    'DEBUG': 'bold_purple',
-    'INFO': 'bold_green',
-    'WARNING': 'bold_yellow',
-    'ERROR': 'bold_red',
-    'CRITICAL': 'red',
-}
-
-# set logger format
-console_format = colorlog.ColoredFormatter(
-    "[%(asctime)s] [%(module)s:%(funcName)s] [%(lineno)d] [%(levelname)s] %(log_color)s%(message)s",
-    log_colors=log_colors_config
-)
-
-# add console handler
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(console_format)
-logger.addHandler(console_handler)
-
-
-def set_log_format():
-    import logging.handlers
-
-    global logger
-
-    # set logger format
-    logfile_format = logging.Formatter(
-        "[%(asctime)s] [%(module)s:%(funcName)s] [%(lineno)d] [%(levelname)s] %(message)s"
-    )
-
-    # add rotate file handler
-    logs_dir = os.path.join(base_dir, 'logs')
-    if not os.path.isdir(logs_dir):
-        os.makedirs(logs_dir, exist_ok=True)
-
-    sep = '/' if '/' in sys.argv[0] else os.sep
-    logfile = logs_dir + sep + sys.argv[0].split(sep)[-1].split('.')[0] + '.log'
-    file_maxsize = 1024 * 1024 * 100  # 100m
-
-    file_handler = logging.handlers.RotatingFileHandler(logfile, maxBytes=file_maxsize, backupCount=10)
-    file_handler.setFormatter(logfile_format)
-    logger.addHandler(file_handler)
 
 
 def parse_args():
@@ -99,6 +46,8 @@ def extend_parser(parser, is_binlog_file=False):
                                  help='MySQL Password to use', default='')
     connect_setting.add_argument('-P', '--port', dest='port', type=int,
                                  help='MySQL port to use', default=3306)
+    connect_setting.add_argument('--encoding', dest='encoding', type=str,
+                                 help='Use for handle rollback sql.', default='utf8')
 
     schema = parser.add_argument_group('schema filter')
     schema.add_argument('-d', '--databases', dest='databases', type=str, nargs='*',
@@ -381,6 +330,7 @@ def handle_list(value: list):
 def fix_hex_values(sql: str, values: list, types: list):
     begin = 0
     new_sql = ''
+    quote_end_idx = 0
     while sql.find("'0x", begin) > 0:
         # 拿第1个引号的下标
         quote_begin_idx = sql.find("'0x", begin)
@@ -556,14 +506,14 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
     elif ignore_virtual_columns and is_dml_event(binlog_event):
         if isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, DeleteRowsEvent):
             for k in row['values'].copy():
-                if re.search('__dropped_col_\d+__', k) is not None:
+                if re.search(r'__dropped_col_\d+__', k) is not None:
                     row['values'].pop(k)
         else:
             for k in row['before_values'].copy():
-                if re.search('__dropped_col_\d+__', k) is not None:
+                if re.search(r'__dropped_col_\d+__', k) is not None:
                     row['before_values'].pop(k)
             for k in row['after_values'].copy():
-                if re.search('__dropped_col_\d+__', k) is not None:
+                if re.search(r'__dropped_col_\d+__', k) is not None:
                     row['after_values'].pop(k)
 
     if remove_not_update_col and isinstance(binlog_event, UpdateRowsEvent):
@@ -859,16 +809,17 @@ def get_table_name(sql):
 
 
 def handle_rollback_sql(f_result_sql_file, table_per_file, date_prefix, no_date, result_dir,
-                        src_file, chunk_size, tmp_dir, result_file, sync_conn=None, sync_cursor=None):
+                        src_file, chunk_size, tmp_dir, result_file, sync_conn=None, sync_cursor=None,
+                        encoding='utf8'):
     if f_result_sql_file:
-        reversed_seq(src_file, chunk_size, tmp_dir, result_file)
+        reversed_seq(src_file, chunk_size, tmp_dir, result_file, encoding=encoding)
     else:
         tmp_file = src_file + '_tmp'
         try:
-            reversed_seq(src_file, chunk_size, tmp_dir, tmp_file)
+            reversed_seq(src_file, chunk_size, tmp_dir, tmp_file, encoding=encoding)
             if os.path.exists(tmp_file):
                 logger.info('handling...')
-                for line in yield_file(tmp_file, chunk_size=1):
+                for line in yield_file(tmp_file, chunk_size=1, encoding=encoding):
                     if table_per_file:
                         table_name = get_table_name(line)
                         if table_name:

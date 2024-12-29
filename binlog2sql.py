@@ -7,14 +7,13 @@ import pymysql
 import os
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent, GtidEvent
-from utils.binlog2sql_util import command_line_args, concat_sql_from_binlog_event, is_dml_event, event_type, logger, \
-    set_log_format, get_gtid_set, is_want_gtid, save_result_sql, dt_now, handle_rollback_sql, get_max_gtid, \
+from utils.binlog2sql_util import command_line_args, concat_sql_from_binlog_event, is_dml_event, event_type, \
+    get_gtid_set, is_want_gtid, save_result_sql, dt_now, handle_rollback_sql, get_max_gtid, \
     remove_max_gtid, connect2sync_mysql
-from utils.other_utils import create_unique_file, temp_open, split_condition, merge_rename_args
-
-sep = '/' if '/' in sys.argv[0] else os.sep
+from utils.other_utils import create_unique_file, temp_open, split_condition, merge_rename_args, logger
 
 
+# noinspection PyUnresolvedReferences
 class Binlog2sql(object):
 
     def __init__(self, connection_settings, start_file=None, start_pos=None, end_file=None, end_pos=None,
@@ -334,7 +333,7 @@ class Binlog2sql(object):
             if self.flashback:
                 handle_rollback_sql(self.f_result_sql_file, self.table_per_file, self.date_prefix, self.no_date,
                                     self.result_dir, tmp_file, self.chunk_size, self.tmp_dir, self.result_file,
-                                    sync_conn, sync_cursor)
+                                    sync_conn, sync_cursor, encoding=self.args.encoding)
 
             if sync_cursor:
                 sync_cursor.close()
@@ -373,5 +372,4 @@ def main(args):
 
 if __name__ == '__main__':
     command_line_args = command_line_args(sys.argv[1:])
-    set_log_format()
     main(command_line_args)

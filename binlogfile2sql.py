@@ -8,7 +8,7 @@ import time
 import pymysql
 import re
 from utils.binlogfile2sql_util import command_line_args, BinLogFileReader
-from utils.binlog2sql_util import concat_sql_from_binlog_event, is_dml_event, event_type, logger, set_log_format, \
+from utils.binlog2sql_util import concat_sql_from_binlog_event, is_dml_event, event_type, logger, \
     get_gtid_set, is_want_gtid, save_result_sql, dt_now, handle_rollback_sql, \
     get_max_gtid, remove_max_gtid, connect2sync_mysql
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent, GtidEvent
@@ -18,6 +18,7 @@ from utils.other_utils import create_unique_file, temp_open, get_binlog_file_lis
 sep = '/' if '/' in sys.argv[0] else os.sep
 
 
+# noinspection PyUnresolvedReferences
 class BinlogFile2sql(object):
     def __init__(self, file_path, connection_settings, start_pos=None, end_pos=None,
                  start_time=None, stop_time=None, only_schemas=None, only_tables=None, no_pk=False,
@@ -298,7 +299,7 @@ class BinlogFile2sql(object):
             if self.flashback:
                 handle_rollback_sql(self.f_result_sql_file, self.table_per_file, self.date_prefix, self.no_date,
                                     self.result_dir, tmp_file, self.chunk_size, self.tmp_dir, self.result_file,
-                                    sync_conn, sync_cursor)
+                                    sync_conn, sync_cursor, encoding=self.args.encoding)
 
             if sync_cursor:
                 sync_cursor.close()
@@ -309,6 +310,7 @@ class BinlogFile2sql(object):
         pass
 
 
+# noinspection PyTypeChecker
 def main(args):
     connection_settings = {'host': args.host, 'port': args.port, 'user': args.user, 'passwd': args.password}
     binlog_file_list, executed_file_list = get_binlog_file_list(args)
@@ -334,7 +336,7 @@ def main(args):
 
     while True:
         for i, binlog_file in enumerate(binlog_file_list):
-            if not (i == 0 and binlog_file == args.start_file):
+            if not i == 0 and not binlog_file == args.start_file:
                 args.start_pos = None
                 args.end_pos = None
             logger.info('parsing binlog file: %s [%s]' %
@@ -373,5 +375,4 @@ def main(args):
 
 if __name__ == '__main__':
     command_line_args = command_line_args(sys.argv[1:])
-    set_log_format()
     main(command_line_args)

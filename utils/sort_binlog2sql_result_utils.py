@@ -3,37 +3,12 @@
 # Author:           Michael Liu
 # Created on:       2022-04-21
 import argparse
-import logging
 import os
 import sys
 import re
 import uuid
-import colorlog
 from rich.progress import track
-
-# create a logger
-logger = logging.getLogger('sort_binlog2sql_result_utils')
-logger.setLevel(logging.INFO)
-
-# set logger color
-log_colors_config = {
-    'DEBUG': 'bold_purple',
-    'INFO': 'bold_green',
-    'WARNING': 'bold_yellow',
-    'ERROR': 'bold_red',
-    'CRITICAL': 'red',
-}
-
-# set logger format
-console_format = colorlog.ColoredFormatter(
-    "[%(asctime)s] [%(module)s:%(funcName)s] [%(lineno)d] [%(levelname)s] %(log_color)s%(message)s",
-    log_colors=log_colors_config
-)
-
-# add console handler
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(console_format)
-logger.addHandler(console_handler)
+from .other_utils import logger
 
 
 def parse_args():
@@ -130,7 +105,7 @@ def sort_by_index(x: list):
 
 
 def get_sql_time(line):
-    return re.search('\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', line).group()
+    return re.search(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', line).group()
 
 
 def sort_by_time(x: str):

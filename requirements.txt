@@ -1,7 +1,9 @@
 PyMySQL==0.9.3
 wheel==0.29.0
 mysql-replication==0.23
-colorlog==5.0.1
 chardet==3.0.4
 cryptography==36.0.1
 rich==12.2.0
+setuptools==75.6.0
+loguru==0.7.3
+pathlib==1.0.1

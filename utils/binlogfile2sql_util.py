@@ -6,7 +6,8 @@ import argparse
 import getpass
 import sys
 from pymysql.cursors import DictCursor
-from utils.binlog2sql_util import is_valid_datetime, logger, sep, extend_parser
+from .other_utils import logger, sep
+from .binlog2sql_util import is_valid_datetime, extend_parser
 from pymysqlreplication.packet import BinLogPacketWrapper
 from pymysqlreplication.constants.BINLOG import TABLE_MAP_EVENT, ROTATE_EVENT
 from pymysqlreplication.event import (
@@ -37,6 +38,7 @@ class StringIOAdvance(BytesIO):
         self.seek(self.tell() + length)
 
 
+# noinspection PyUnresolvedReferences
 class BinLogFileReader(object):
     """Connect to replication stream and read event
     """
@@ -255,22 +257,9 @@ class BinLogFileReader(object):
         if only_events is not None:
             events = set(only_events)
         else:
-            events = set((
-                QueryEvent,
-                RotateEvent,
-                StopEvent,
-                FormatDescriptionEvent,
-                XidEvent,
-                GtidEvent,
-                BeginLoadQueryEvent,
-                ExecuteLoadQueryEvent,
-                UpdateRowsEvent,
-                WriteRowsEvent,
-                DeleteRowsEvent,
-                TableMapEvent,
-                HeartbeatLogEvent,
-                NotImplementedEvent,
-            ))
+            events = {QueryEvent, RotateEvent, StopEvent, FormatDescriptionEvent, XidEvent, GtidEvent,
+                      BeginLoadQueryEvent, ExecuteLoadQueryEvent, UpdateRowsEvent, WriteRowsEvent, DeleteRowsEvent,
+                      TableMapEvent, HeartbeatLogEvent, NotImplementedEvent}
         if ignored_events is not None:
             for e in ignored_events:
                 events.remove(e)
