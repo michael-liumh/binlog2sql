@@ -102,9 +102,16 @@ class Binlog2sql(object):
                 self.only_dml = True
 
         with self.connection as cursor:
-            cursor.execute("SHOW MASTER STATUS")
+            # MySQL 8.4 移除了 SHOW MASTER STATUS / SHOW MASTER LOGS，改用新语法并做回退
+            try:
+                cursor.execute("SHOW BINARY LOG STATUS")
+            except pymysql.err.ProgrammingError:
+                cursor.execute("SHOW MASTER STATUS")
             self.eof_file, self.eof_pos = cursor.fetchone()[:2]
-            cursor.execute("SHOW MASTER LOGS")
+            try:
+                cursor.execute("SHOW BINARY LOGS")
+            except pymysql.err.ProgrammingError:
+                cursor.execute("SHOW MASTER LOGS")
             bin_index = [row[0] for row in cursor.fetchall()]
             if self.start_file not in bin_index:
                 raise ValueError('parameter error: start_file %s not in mysql server' % self.start_file)
@@ -124,10 +131,12 @@ class Binlog2sql(object):
                                     only_tables=self.only_tables, resume_stream=True, blocking=True,
                                     ignored_schemas=self.ignore_databases, ignored_tables=self.ignore_tables)
         mode = 'w'
+        self.result_encoding = getattr(self.args, 'encoding', None) or 'utf8'
         if self.result_file:
             result_sql_file = self.result_file
             logger.info(f'Saving result into file: [{result_sql_file}]')
-            self.f_result_sql_file = open(result_sql_file, mode)
+            self.f_result_sql_file = open(result_sql_file, mode, encoding=self.result_encoding,
+                                           errors='backslashreplace')
         elif self.table_per_file:
             logger.info(f'Saving table per file into dir: [{self.result_dir}]')
 
@@ -141,7 +150,8 @@ class Binlog2sql(object):
 
         sync_conn = ''
         sync_cursor = ''
-        with temp_open(tmp_file, "w") as f_tmp, self.connection as cursor:
+        with temp_open(tmp_file, "w", encoding=self.result_encoding, errors='backslashreplace') as f_tmp, \
+                self.connection as cursor:
             if self.args and self.args.sync:
                 sync_conn = connect2sync_mysql(self.args)
                 sync_cursor = sync_conn.cursor()
@@ -333,7 +343,7 @@ class Binlog2sql(object):
             if self.flashback:
                 handle_rollback_sql(self.f_result_sql_file, self.table_per_file, self.date_prefix, self.no_date,
                                     self.result_dir, tmp_file, self.chunk_size, self.tmp_dir, self.result_file,
-                                    sync_conn, sync_cursor, encoding=self.args.encoding)
+                                    sync_conn, sync_cursor, encoding=self.result_encoding)
 
             if sync_cursor:
                 sync_cursor.close()
@@ -345,6 +355,13 @@ class Binlog2sql(object):
 
 
 def main(args):
+    # Windows 下控制台/管道默认 GBK 编码，输出含 emoji 等字符时会崩溃，统一改为 utf-8
+    if hasattr(sys.stdout, 'reconfigure'):
+        try:
+            sys.stdout.reconfigure(encoding='utf8', errors='backslashreplace')
+        except Exception:
+            pass
+
     conn_setting = {
         'host': args.host,
         'port': args.port,

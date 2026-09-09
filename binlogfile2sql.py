@@ -108,11 +108,13 @@ class BinlogFile2sql(object):
             result_sql_file = self.result_file
 
         mode = 'w' if self.file_index == 0 else 'a'
+        self.result_encoding = getattr(self.args, 'encoding', None) or 'utf8'
         if result_sql_file and not self.table_per_file:
             if self.file_index == 0:
                 save_result_sql(result_sql_file, '', mode)
                 logger.info(f'Saving result into file: [{result_sql_file}]')
-            self.f_result_sql_file = open(result_sql_file, mode)
+            self.f_result_sql_file = open(result_sql_file, mode, encoding=self.result_encoding,
+                                          errors='backslashreplace')
 
         if self.table_per_file:
             logger.info(f'Saving table per file into dir: [{self.result_dir}]')
@@ -127,7 +129,8 @@ class BinlogFile2sql(object):
 
         sync_conn = ''
         sync_cursor = ''
-        with temp_open(tmp_file, "w") as f_tmp, self.connection as cursor:
+        with temp_open(tmp_file, "w", encoding=self.result_encoding, errors='backslashreplace') as f_tmp, \
+                self.connection as cursor:
             if self.args and self.args.sync:
                 sync_conn = connect2sync_mysql(self.args)
                 sync_cursor = sync_conn.cursor()
@@ -299,7 +302,7 @@ class BinlogFile2sql(object):
             if self.flashback:
                 handle_rollback_sql(self.f_result_sql_file, self.table_per_file, self.date_prefix, self.no_date,
                                     self.result_dir, tmp_file, self.chunk_size, self.tmp_dir, self.result_file,
-                                    sync_conn, sync_cursor, encoding=self.args.encoding)
+                                    sync_conn, sync_cursor, encoding=self.result_encoding)
 
             if sync_cursor:
                 sync_cursor.close()
@@ -312,6 +315,13 @@ class BinlogFile2sql(object):
 
 # noinspection PyTypeChecker
 def main(args):
+    # Windows 下控制台/管道默认 GBK 编码，输出含 emoji 等字符时会崩溃，统一改为 utf-8
+    if hasattr(sys.stdout, 'reconfigure'):
+        try:
+            sys.stdout.reconfigure(encoding='utf8', errors='backslashreplace')
+        except Exception:
+            pass
+
     connection_settings = {'host': args.host, 'port': args.port, 'user': args.user, 'passwd': args.password}
     binlog_file_list, executed_file_list = get_binlog_file_list(args)
 

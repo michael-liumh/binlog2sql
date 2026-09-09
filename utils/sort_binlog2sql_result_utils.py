@@ -77,18 +77,18 @@ def read_file(filename, encoding: str = 'utf8'):
 
 def yield_file(filename, encoding: str = 'utf8', chunk_size: int = 1000):
     with open(filename, 'r', encoding=encoding) as f:
-        tmp_list = []
-        for i, line in enumerate(f):
-            if chunk_size > 1:
-                tmp_list.append(line)
-                if i != 0 and i % chunk_size == 0:
-                    yield tmp_list
-                    tmp_list = []
-            else:
+        if chunk_size <= 1:
+            for line in f:
                 yield line
-        else:
-            if tmp_list:
-                yield tmp_list
+            return
+        chunk = []
+        for line in f:
+            chunk.append(line)
+            if len(chunk) >= chunk_size:
+                yield chunk
+                chunk = []
+        if chunk:
+            yield chunk
 
 
 def save_to_file(filename, msg, encoding: str = 'utf8', mode: str = 'w'):
@@ -105,7 +105,8 @@ def sort_by_index(x: list):
 
 
 def get_sql_time(line):
-    return re.search(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', line).group()
+    match = re.search(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', line)
+    return match.group() if match else ''
 
 
 def sort_by_time(x: str):
@@ -126,8 +127,8 @@ def get_min_max_val(tmp_list: list):
 
 def get_file_line_count(filename):
     logger.info(f'Getting line count of file {filename} ...')
-    command = f'wc -l {filename} | awk ' + "'{print $1}'"
-    return int(os.popen(command).read())
+    with open(filename, 'rb') as f:
+        return sum(1 for _ in f)
 
 
 def init_tmp_dir(tmp_dir):
@@ -151,7 +152,7 @@ def reversed_seq(src_file, chunk_size, tmp_dir, dst_file, encoding='utf8', delet
         logger.error(f'{src_file} is empty.')
         return
 
-    total_part = file_line_count // chunk_size + 1
+    total_part = (file_line_count + chunk_size - 1) // chunk_size
     try:
         record_list = []
         tmp_dir = init_tmp_dir(tmp_dir)

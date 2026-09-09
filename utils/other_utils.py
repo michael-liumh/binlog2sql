@@ -1,5 +1,6 @@
 # !/usr/bin/env python3
 # -*- coding:utf8 -*-
+import json
 import os
 import sys
 import re
@@ -33,8 +34,13 @@ def create_unique_file(filename, path=None):
 
 
 @contextmanager
-def temp_open(filename, mode):
-    f = open(filename, mode)
+def temp_open(filename, mode, encoding=None, errors=None):
+    open_kwargs = {}
+    if encoding:
+        open_kwargs['encoding'] = encoding
+    if errors:
+        open_kwargs['errors'] = errors
+    f = open(filename, mode, **open_kwargs)
     try:
         yield f
     finally:
@@ -109,34 +115,74 @@ def timestamp_to_datetime(ts: int, datetime_format: str = None) -> str:
     return datetime_str
 
 
-def fix_json_col(col_list):
-    # 左括号数量 与 右括号数量
-    json_mark_left_cnt = 0
-    json_mark_right_cnt = 0
-    json_col = ''
-    col_list_new = []
-    for i, col in enumerate(col_list):
-        if isinstance(col, str):
-            col = col.strip()
+def split_in_values(src: str):
+    """按逗号拆分 IN (...) 内的值。
 
-        if re.search('{', col) is not None:
-            json_mark_left_cnt += col.count('{')
-            if re.search('}', col) is not None:
-                json_mark_right_cnt += col.count('}')
-            json_col += col + ','
-            if json_mark_left_cnt == json_mark_right_cnt:
-                col_list_new.append(json_col[:-1])
-                json_col = ''
-        elif json_mark_left_cnt != json_mark_right_cnt:
-            if re.search('}', col) is not None:
-                json_mark_right_cnt += col.count('}')
-            json_col += col + ','
-            if json_mark_left_cnt == json_mark_right_cnt:
-                col_list_new.append(json_col[:-1])
-                json_col = ''
-        else:
-            col_list_new.append(col)
-    return col_list_new
+    忽略 JSON 对象 {}、数组 [] 以及引号字符串内部的逗号，
+    避免 JSON 值里的逗号被误当作分隔符。
+    """
+    values = []
+    start = 0
+    brace_depth = 0
+    bracket_depth = 0
+    in_quote = None
+    escaped = False
+    for i, ch in enumerate(src):
+        if in_quote:
+            if escaped:
+                escaped = False
+            elif ch == '\\':
+                escaped = True
+            elif ch == in_quote:
+                in_quote = None
+            continue
+        if ch in ('"', "'"):
+            in_quote = ch
+        elif ch == '{':
+            brace_depth += 1
+        elif ch == '}':
+            brace_depth = max(brace_depth - 1, 0)
+        elif ch == '[':
+            bracket_depth += 1
+        elif ch == ']':
+            bracket_depth = max(bracket_depth - 1, 0)
+        elif ch == ',' and brace_depth == 0 and bracket_depth == 0:
+            values.append(src[start:i])
+            start = i + 1
+    values.append(src[start:])
+    return values
+
+
+def parse_in_value(v: str):
+    """把 IN 列表里的单个值解析成合适的 Python 类型。
+
+    支持 JSON 对象/数组、数字、布尔、null、引号字符串及裸字符串。
+    """
+    v = v.strip()
+    if v in ('""', "''"):
+        return ''
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in ('"', "'"):
+        inner = v[1:-1]
+        # 带引号的 JSON 值也要解析成 dict/list，便于与 binlog 里的 JSON 列匹配
+        try:
+            parsed = json.loads(inner)
+            if isinstance(parsed, (dict, list)):
+                return parsed
+        except ValueError:
+            pass
+        return inner
+    try:
+        return json.loads(v)
+    except ValueError:
+        pass
+    try:
+        return int(v)
+    except ValueError:
+        pass
+    try:
+        return float(v)
+    except ValueError:
+        return v
 
 
 def parse_split_condition(cond, condition_list):
@@ -158,7 +204,6 @@ def parse_split_condition(cond, condition_list):
         calc_type = '<'
     elif ' IS ' in cond:
         calc_type = ' IS '
-        cond = re.sub(' [nN][uU][lL][lL]', ' NULL', cond)
     elif ' IN ' in cond:
         calc_type = ' IN '
     else:
@@ -170,35 +215,28 @@ def parse_split_condition(cond, condition_list):
     if calc_type == ' IN ':
         left_quote_idx = value.find('(')
         right_quote_idx = value.rfind(')')
+        if left_quote_idx == -1 or right_quote_idx <= left_quote_idx:
+            logger.warning(f"Ignore condition: {cond} !!! Invalid IN condition.")
+            return
         quote_part = value[left_quote_idx + 1: right_quote_idx]
-        quote_part_value = quote_part.split(',')
-        if '{' in quote_part:
-            json_mark_left_cnt = quote_part.count('{')
-            json_mark_right_cnt = quote_part.count('}')
-            if json_mark_left_cnt == json_mark_right_cnt:
-                quote_part_value = fix_json_col(quote_part_value)
-        value = []
-        for v in quote_part_value:
+        value = [parse_in_value(v) for v in split_in_values(quote_part) if v.strip()]
+    elif calc_type == ' IS ' and value.upper() == 'NULL':
+        value = None
+    elif value in ('""', "''"):
+        value = ''
+    else:
+        try:
+            value = int(value)
+        except ValueError:
             try:
-                if isinstance(v, str):
-                    v = int(v)
+                value = float(value)
             except ValueError:
                 pass
-            if value in ['""', "''"]:
-                value.append('')
-            else:
-                value.append(v)
-
-    try:
-        if isinstance(value, str):
-            value = int(value)
-    except ValueError:
-        pass
 
     condition_list.append({
         "column": cond_split[0].strip().replace('`', ''),
         "calc_type": calc_type.strip(),
-        "value": '' if value in ['""', "''"] else value,
+        "value": value,
     })
 
 

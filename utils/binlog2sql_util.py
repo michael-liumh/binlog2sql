@@ -8,6 +8,8 @@ import argparse
 import datetime
 import getpass
 import json
+import operator
+import uuid
 import chardet
 import pymysql
 from functools import partial
@@ -17,7 +19,7 @@ from pymysqlreplication.row_event import (
     UpdateRowsEvent,
     DeleteRowsEvent,
 )
-from .other_utils import is_valid_datetime, logger
+from .other_utils import is_valid_datetime, logger, sep
 from .sort_binlog2sql_result_utils import reversed_seq, yield_file
 
 if sys.version > '3':
@@ -213,11 +215,15 @@ def command_line_args(args):
     return args
 
 
-def compare_items(items):
+def compare_items(items, json_columns=None):
     # caution: if v is NULL, may need to process
+    json_columns = json_columns or set()
     (k, v) = items
     if v is None:
         return '`%s` IS %%s' % k
+    # JSON 值与裸字符串永不相等，需要 CAST 成 JSON 再比较
+    elif k in json_columns:
+        return '`%s`=CAST(%%s AS JSON)' % k
     else:
         return '`%s`=%%s' % k
 
@@ -226,6 +232,12 @@ def fix_object_bytes(value: bytes, is_bytes_column: bool = True):
     if is_bytes_column:
         value = '0x' + value.hex().upper()
         return value
+
+    # 优先按 utf8 解码，失败后再用 chardet 探测，避免大量 bytes 值走慢速的 chardet
+    try:
+        return value.decode('utf8')
+    except UnicodeDecodeError:
+        pass
 
     try:
         encoding = chardet.detect(value).get('encoding', '')
@@ -279,7 +291,11 @@ def fix_object(value, is_return_type: bool = False):
         return type(value)
 
     if isinstance(value, set):
-        value = ','.join(value)
+        value = ','.join(sorted(value))
+    if isinstance(value, float):
+        # pymysql 的 escape_float 只有 %.15g 精度，会丢精度导致 UPDATE/DELETE 的
+        # WHERE 条件匹配不到行；转成 repr 精确字符串，由 MySQL 精确解析
+        value = repr(value)
     if PY3PLUS and isinstance(value, bytes):
         return fix_object_bytes(value)
     # 添加json数据解析
@@ -327,34 +343,91 @@ def handle_list(value: list):
     return new_list
 
 
-def fix_hex_values(sql: str, values: list, types: list):
-    begin = 0
-    new_sql = ''
-    quote_end_idx = 0
-    while sql.find("'0x", begin) > 0:
-        # 拿第1个引号的下标
-        quote_begin_idx = sql.find("'0x", begin)
-        # 拿第2个引号的下标
-        quote_end_idx = sql.find("'", quote_begin_idx + 1)
-        # 获取 0x 开头的值
-        quote_value = sql[quote_begin_idx + 1:quote_end_idx]
+def hex_token_transform(pattern_values, types):
+    """mogrify 前，把 bytes 列的十六进制值替换为唯一 token。
 
-        # 确认 0x 开头的值是十六进制的值，还是字符串
-        quote_value_idx = values.index(quote_value)
-        quote_value_type = types[quote_value_idx]
-        if quote_value_type == str:
-            # 保留原样
-            new_sql += sql[begin:quote_end_idx + 1]
-        else:
-            # 去除 十六进制值 前后的引号
-            new_sql += sql[begin:quote_begin_idx] + sql[quote_begin_idx + 1:quote_end_idx]
+    mogrify 会给值加上引号并转义内部字符，如果直接生成 '0x...' 再靠扫描 SQL 文本去引号，
+    会误伤本身就包含 '0x' 字样的字符串值（如 varchar '0x41'），也可能匹配到转义引号而取错值。
+    因此这里按位置（types 里的 bytes 类型）把值换成随机 token，mogrify 后再精确还原。
+    空 bytes 的十六进制是 '0x'（空字面量非法），还原为 '' 。
+    """
+    token_map = {}
+    if isinstance(pattern_values, list):
+        for i, value_type in enumerate(types):
+            if value_type is not bytes or i >= len(pattern_values):
+                continue
+            value = pattern_values[i]
+            if not isinstance(value, str) or not value.startswith('0x'):
+                continue
+            token = 'b2sqlhx%d%s' % (i, uuid.uuid4().hex)
+            # 空 bytes 的 '0x' 是非法字面量，还原为带引号的空串（二进制列写入 '' 等价于空值）
+            token_map[token] = value if value != '0x' else "''"
+            pattern_values[i] = token
+    return token_map
 
-        begin = quote_end_idx + 1
 
-    if new_sql:
-        new_sql += sql[quote_end_idx + 1:]
+def restore_hex_tokens(sql: str, token_map: dict):
+    """把 mogrify 输出里带引号的 token 替换回不带引号的十六进制字面量"""
+    for token, literal in token_map.items():
+        sql = sql.replace("'%s'" % token, literal)
+    return sql
 
-    return new_sql
+
+# 表的列类型信息缓存：{(db, table): (bit_cols, {set_col: [成员...]}, {非空 set_col}, json_cols, {binary_col: 长度})}
+_COLUMN_TYPE_CACHE = {}
+
+
+def get_column_type_info(cursor, schema, table):
+    key = (schema, table)
+    if key not in _COLUMN_TYPE_CACHE:
+        bit_cols, set_orders, set_not_null, json_cols, binary_max_len = set(), {}, set(), set(), {}
+        try:
+            cursor.execute(
+                "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH "
+                "FROM information_schema.columns "
+                "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s "
+                "AND DATA_TYPE IN ('bit', 'set', 'json', 'binary')",
+                (schema, table))
+            for name, column_type, is_nullable, data_type, max_len in cursor.fetchall():
+                data_type = (data_type or '').lower()
+                if data_type == 'bit':
+                    bit_cols.add(name)
+                elif data_type == 'set':
+                    members = re.findall(r"'((?:[^']|'')*)'", column_type or '', re.I)
+                    set_orders[name] = [m.replace("''", "'") for m in members]
+                    if is_nullable == 'NO':
+                        set_not_null.add(name)
+                elif data_type == 'json':
+                    json_cols.add(name)
+                elif data_type == 'binary':
+                    # binlog 会剥离 BINARY(N) 列的尾部零字节，需要按定义长度补零
+                    binary_max_len[name] = int(max_len) if max_len is not None else 1
+        except Exception:
+            logger.warning(f'Could not fetch bit/set/json/binary column info for {schema}.{table}')
+        _COLUMN_TYPE_CACHE[key] = (bit_cols, set_orders, set_not_null, json_cols, binary_max_len)
+    return _COLUMN_TYPE_CACHE[key]
+
+
+def transform_row_values_by_column_type(row_values: dict, bit_cols: set, set_orders: dict, set_not_null: set,
+                                        binary_max_len: dict):
+    """按列类型修正 pymysqlreplication 解析出的值：
+
+    - BIT 列返回 '0101' 位字符串，SQL 里需要的是数值，否则 '11111111' 会被当作数字 11111111
+    - SET 列返回 set 对象，fix_object 按字母序拼接，MySQL 的 SET 值应按定义顺序排列
+    - pymysqlreplication 把「空 SET」折叠成 None，对 NOT NULL 的 SET 列还原为 ''，
+      否则 UPDATE/DELETE 的 WHERE 条件会匹配不到行
+    - BINARY(N) 列在 binlog 中不存储尾部零字节，补零到定义长度才能匹配存储值
+    """
+    for k, v in list(row_values.items()):
+        if k in bit_cols and isinstance(v, str) and v and set(v) <= {'0', '1'}:
+            row_values[k] = int(v, 2)
+        elif k in set_orders:
+            if isinstance(v, (set, frozenset)):
+                row_values[k] = ','.join(m for m in set_orders[k] if m in v)
+            elif v is None and k in set_not_null:
+                row_values[k] = ''
+        elif k in binary_max_len and isinstance(v, bytes) and len(v) < binary_max_len[k]:
+            row_values[k] = v + b'\x00' * (binary_max_len[k] - len(v))
 
 
 def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=None, flashback=False, no_pk=False,
@@ -373,6 +446,23 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
     table = ''
     if isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, UpdateRowsEvent) \
             or isinstance(binlog_event, DeleteRowsEvent):
+        # BIT/SET 列需要按表结构修正解析值，必须在生成 SQL 模板前处理
+        schema = binlog_event.schema.decode('utf8') if isinstance(binlog_event.schema, bytes) else binlog_event.schema
+        table_name = binlog_event.table.decode('utf8') if isinstance(binlog_event.table, bytes) else binlog_event.table
+        bit_cols, set_orders, set_not_null, json_cols, binary_max_len = get_column_type_info(cursor, schema, table_name)
+        if bit_cols or set_orders or binary_max_len:
+            target_rows = [row] if row else binlog_event.rows
+            for target_row in target_rows:
+                if 'values' in target_row:
+                    transform_row_values_by_column_type(target_row['values'], bit_cols, set_orders, set_not_null,
+                                                        binary_max_len)
+                if 'before_values' in target_row:
+                    transform_row_values_by_column_type(target_row['before_values'], bit_cols, set_orders, set_not_null,
+                                                        binary_max_len)
+                if 'after_values' in target_row:
+                    transform_row_values_by_column_type(target_row['after_values'], bit_cols, set_orders, set_not_null,
+                                                        binary_max_len)
+
         # 会调用 fix_object 函数生成sql
         (pattern, db, table), types = generate_sql_pattern(
             binlog_event, row=row, flashback=flashback, no_pk=no_pk, rename_db_dict=rename_db_dict, only_pk=only_pk,
@@ -380,6 +470,7 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
             ignore_virtual_columns=ignore_virtual_columns, remove_not_update_col=remove_not_update_col,
             update_to_replace=update_to_replace, keep_not_update_col=keep_not_update_col,
             filter_conditions=filter_conditions, rename_tb_dict=rename_tb_dict,
+            json_columns=json_cols,
         )
 
         if pattern['values']:
@@ -388,9 +479,11 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
                 pattern_values = handle_list(pattern['values'])
             else:
                 pattern_values = pattern['values']
+            # bytes 列的十六进制值先换成 token，mogrify 之后再还原成不带引号的字面量
+            token_map = hex_token_transform(pattern_values, types)
             sql = cursor.mogrify(pattern['template'], pattern_values)
-            if "'0x" in str(sql):
-                sql = fix_hex_values(sql, pattern_values, types)
+            if token_map:
+                sql = restore_hex_tokens(sql, token_map)
             time = datetime.datetime.fromtimestamp(binlog_event.timestamp)
             sql += ' #start %s end %s time %s' % (e_start_pos, binlog_event.packet.log_pos, time)
             if binlog_gtid:
@@ -398,6 +491,10 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
     elif flashback is False and isinstance(binlog_event, QueryEvent) and binlog_event.query != 'BEGIN' \
             and binlog_event.query != 'COMMIT':
         sql = '{0};'.format(fix_object(binlog_event.query))
+
+        # DDL 可能改变表结构（如 ALTER TABLE MODIFY 列类型），清空列类型信息缓存
+        if re.match(r'(?i)^\s*(ALTER|CREATE|DROP|RENAME|TRUNCATE)', binlog_event.query or ''):
+            _COLUMN_TYPE_CACHE.clear()
 
         if binlog_event.schema:
             if isinstance(binlog_event.schema, bytes):
@@ -414,57 +511,129 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
         return sql
 
 
+COND_OPERATORS = {
+    '=': operator.eq,
+    '!=': operator.ne,
+    '<>': operator.ne,
+    '>': operator.gt,
+    '>=': operator.ge,
+    '<': operator.lt,
+    '<=': operator.le,
+    'IS': operator.eq,
+}
+
+
+def normalize_json_value(value):
+    """规范化 JSON 列值：把 bytes（含 dict 的 key）转成 str，便于与条件值比较"""
+    if isinstance(value, dict):
+        return {normalize_json_value(k): normalize_json_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [normalize_json_value(v) for v in value]
+    if isinstance(value, bytes):
+        try:
+            return value.decode('utf8')
+        except UnicodeDecodeError:
+            # 二进制内容按十六进制表示，与生成的 SQL 里 0x... 的写法一致
+            return '0x' + value.hex().upper()
+    return value
+
+
+def coerce_cond_value(column_value, cond_value):
+    """把条件值转换到与列值可比较的类型"""
+    if cond_value is None:
+        return cond_value
+    if isinstance(cond_value, (dict, list)):
+        return normalize_json_value(cond_value)
+    if isinstance(column_value, datetime.datetime):
+        if isinstance(cond_value, str):
+            for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y-%m-%d'):
+                try:
+                    return datetime.datetime.strptime(cond_value, fmt)
+                except ValueError:
+                    continue
+    elif isinstance(column_value, datetime.date):
+        if isinstance(cond_value, str):
+            try:
+                return datetime.datetime.strptime(cond_value, '%Y-%m-%d').date()
+            except ValueError:
+                pass
+    elif isinstance(column_value, int) and not isinstance(column_value, bool):
+        if isinstance(cond_value, str):
+            try:
+                return int(cond_value)
+            except ValueError:
+                pass
+    elif isinstance(column_value, float):
+        if isinstance(cond_value, str):
+            try:
+                return float(cond_value)
+            except ValueError:
+                pass
+    return cond_value
+
+
+def _safe_cmp(op, a, b):
+    try:
+        return bool(op(a, b))
+    except Exception:
+        return False
+
+
+def _coerce_pair(a, b):
+    """MySQL 语义：字符串与数字比较时按数值比较；0x 十六进制忽略大小写"""
+    if isinstance(a, str) and isinstance(b, str) and a.startswith('0x') and b.startswith('0x'):
+        return a.upper(), b.upper()
+    if isinstance(a, str) and isinstance(b, (int, float)) and not isinstance(b, bool):
+        try:
+            return float(a), float(b)
+        except ValueError:
+            return a, b
+    if isinstance(b, str) and isinstance(a, (int, float)) and not isinstance(a, bool):
+        try:
+            return float(a), float(b)
+        except ValueError:
+            return a, b
+    return a, b
+
+
+def match_condition(column_value, cond_value, calc_type):
+    """安全匹配单条条件，两侧类型不一致时按不匹配处理，不再抛异常"""
+    column_value = normalize_json_value(column_value)
+    if calc_type == 'IN':
+        if not isinstance(cond_value, (list, tuple, set)):
+            return False
+        for item in cond_value:
+            a, b = _coerce_pair(column_value, coerce_cond_value(column_value, item))
+            if _safe_cmp(operator.eq, a, b):
+                return True
+        return False
+
+    op = COND_OPERATORS.get(calc_type)
+    if op is None:
+        return False
+    a, b = _coerce_pair(column_value, coerce_cond_value(column_value, cond_value))
+    return _safe_cmp(op, a, b)
+
+
+def match_condition_dict(cond, values):
+    cond_column = cond['column']
+    if cond_column not in values:
+        return False
+    return match_condition(values[cond_column], cond['value'], cond['calc_type'])
+
+
 def check_condition_match_row(filter_conditions, values, check_match_flag):
     for cond_elem in filter_conditions:
-        # 校验单个条件
+        # 校验单个条件（AND 语义）：任何一个不满足，则整行数据不符合
         if isinstance(cond_elem, dict):
-            cond_column = cond_elem['column']
-            cond_value = cond_elem['value']
-            cond_calc_type = cond_elem['calc_type']
-            # 定义的条件字段存在于 WHERE 条件中，则进行检验；不存在则直接将这条数据置为不符合条件的数据
-            # 有多个条件时，需要校验多次，以最后一次的校验结果为准
-            if cond_column in values:
-                if cond_calc_type in ['=', '>=', '<=', 'IS'] and values[cond_column] == cond_value:
-                    check_match_flag = 1
-                elif cond_calc_type in ['>=', '>'] and values[cond_column] > cond_value:
-                    check_match_flag = 1
-                elif cond_calc_type in ['<=', '<'] and values[cond_column] < cond_value:
-                    check_match_flag = 1
-                elif cond_calc_type in ['!=', '<>'] and values[cond_column] != cond_value:
-                    check_match_flag = 1
-                elif cond_calc_type == 'IN' and values[cond_column] in cond_value:
-                    check_match_flag = 1
-                else:
-                    check_match_flag = 0
-            # 中途若有一个条件校验不通过，则提前终止，将该行数据置为不符合条件的数据
+            if match_condition_dict(cond_elem, values):
+                check_match_flag = 1
             else:
                 check_match_flag = 0
                 break
-        # 校验 OR 条件
+        # 校验 OR 条件：只要有一个满足即可
         elif isinstance(cond_elem, tuple):
-            check_match_flag = 0
-            for cond in cond_elem:
-                cond_column = cond['column']
-                cond_value = cond['value']
-                cond_calc_type = cond['calc_type']
-                # 校验 OR 条件时，第 1 个校验不通过，继续校验后续的
-                # 只要有一个校验通过，校验标志会被置为 1 （默认为 0）
-                if cond_column in values:
-                    if cond_calc_type in ['=', '>=', '<=', 'IS'] and values[cond_column] == cond_value:
-                        check_match_flag = 1
-                        break
-                    elif cond_calc_type in ['>=', '>'] and values[cond_column] > cond_value:
-                        check_match_flag = 1
-                        break
-                    elif cond_calc_type in ['<=', '<'] and values[cond_column] < cond_value:
-                        check_match_flag = 1
-                        break
-                    elif cond_calc_type in ['!=', '<>'] and values[cond_column] != cond_value:
-                        check_match_flag = 1
-                        break
-                    elif cond_calc_type == 'IN' and values[cond_column] in cond_value:
-                        check_match_flag = 1
-                        break
+            check_match_flag = 1 if any(match_condition_dict(cond, values) for cond in cond_elem) else 0
     return check_match_flag
 
 
@@ -480,7 +649,8 @@ def get_pk_item(binlog_event, values):
 def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, rename_db_dict=None, rename_tb_dict=None,
                          only_pk=False, ignore_columns=None, replace=False, insert_ignore=False,
                          ignore_virtual_columns=False, remove_not_update_col=False, return_type=False,
-                         update_to_replace=False, keep_not_update_col: list = None, filter_conditions: list = None):
+                         update_to_replace=False, keep_not_update_col: list = None, filter_conditions: list = None,
+                         json_columns=None):
     # 检查是否有符合条件的数据：-1 表示默认值，0 表示不符合，1 表示符合
     check_match_flag = -1
 
@@ -537,6 +707,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
     db = binlog_event.schema
     table = binlog_event.table
     fix_object_new = partial(fix_object, is_return_type=True)
+    compare = partial(compare_items, json_columns=json_columns)
 
     if check_match_flag in [-1, 1]:
         specified_rename_db = rename_db_dict.get(binlog_event.schema) if rename_db_dict else ''
@@ -552,7 +723,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                 if not only_pk:
                     template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
                         db, tb,
-                        ' AND '.join(map(compare_items, row['values'].items()))
+                        ' AND '.join(map(compare, row['values'].items()))
                     )
                     values = map(fix_object, row['values'].values())
                     types = map(fix_object_new, row['values'].values())
@@ -560,10 +731,10 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                     pk_item = get_pk_item(binlog_event, row["values"])
                     template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
                         db, tb,
-                        ' AND '.join(map(compare_items, pk_item.items()))
+                        ' AND '.join(map(compare, pk_item.items()))
                     )
                     values = map(fix_object, pk_item.values())
-                    types = map(fix_object_new, row['values'].values())
+                    types = map(fix_object_new, pk_item.values())
             elif isinstance(binlog_event, DeleteRowsEvent):
                 if replace:
                     template = 'REPLACE INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
@@ -591,7 +762,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                         template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
                             db, tb,
                             ', '.join(['`%s`=%%s' % x for x in row['before_values'].keys()]),
-                            ' AND '.join(map(compare_items, row['after_values'].items())))
+                            ' AND '.join(map(compare, row['after_values'].items())))
                         values = map(fix_object,
                                      list(row['before_values'].values()) + list(row['after_values'].values()))
                         types = map(
@@ -602,7 +773,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                         template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
                             db, tb,
                             ', '.join(['`%s`=%%s' % x for x in row['before_values'].keys()]),
-                            ' AND '.join(map(compare_items, pk_item.items())))
+                            ' AND '.join(map(compare, pk_item.items())))
                         values = map(fix_object, list(row['before_values'].values()) + list(pk_item.values()))
                         types = map(fix_object_new, list(row['before_values'].values()) + list(pk_item.values()))
                 else:
@@ -645,13 +816,13 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
             elif isinstance(binlog_event, DeleteRowsEvent):
                 if not only_pk:
                     template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
-                        db, tb, ' AND '.join(map(compare_items, row['values'].items())))
+                        db, tb, ' AND '.join(map(compare, row['values'].items())))
                     values = map(fix_object, row['values'].values())
                     types = map(fix_object_new, row['values'].values())
                 else:
                     pk_item = get_pk_item(binlog_event, row["values"])
                     template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
-                        db, tb, ' AND '.join(map(compare_items, pk_item.items())))
+                        db, tb, ' AND '.join(map(compare, pk_item.items())))
                     values = map(fix_object, pk_item.values())
                     types = map(fix_object_new, pk_item.values())
             elif isinstance(binlog_event, UpdateRowsEvent):
@@ -660,7 +831,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                         template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
                             db, tb,
                             ', '.join(['`%s`=%%s' % k for k in row['after_values'].keys()]),
-                            ' AND '.join(map(compare_items, row['before_values'].items()))
+                            ' AND '.join(map(compare, row['before_values'].items()))
                         )
                         values = map(fix_object,
                                      list(row['after_values'].values()) + list(row['before_values'].values()))
@@ -671,7 +842,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, r
                         template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
                             db, tb,
                             ', '.join(['`%s`=%%s' % k for k in row['after_values'].keys()]),
-                            ' AND '.join(map(compare_items, pk_item.items()))
+                            ' AND '.join(map(compare, pk_item.items()))
                         )
                         values = map(fix_object, list(row['after_values'].values()) + list(pk_item.values()))
                         types = map(fix_object_new, list(row['after_values'].values()) + list(pk_item.values()))
@@ -706,10 +877,7 @@ def get_gtid_set(include_gtids, exclude_gtids):
         for gtid in gtids:
             gtid_splited = gtid.split(':')
             uuid = gtid_splited[0]
-            if uuid not in gtid_set:
-                gtid_set['include'][uuid] = []
-            txn_range = gtid_splited[1:]
-            gtid_set['include'][uuid].extend(txn_range)
+            gtid_set['include'].setdefault(uuid, []).extend(gtid_splited[1:])
 
     if exclude_gtids:
         gtid_set['exclude'] = {}
@@ -717,10 +885,7 @@ def get_gtid_set(include_gtids, exclude_gtids):
         for gtid in gtids:
             gtid_splited = gtid.split(':')
             uuid = gtid_splited[0]
-            if uuid not in gtid_set:
-                gtid_set['exclude'][uuid] = []
-            txn_range = gtid_splited[1:]
-            gtid_set['exclude'][uuid].extend(txn_range)
+            gtid_set['exclude'].setdefault(uuid, []).extend(gtid_splited[1:])
 
     return gtid_set
 
@@ -793,18 +958,11 @@ def dt_now(datetime_format: str = None) -> str:
 
 def get_table_name(sql):
     table_name = ''
-    if sql.strip().upper().startswith('DELETE'):
-        from_idx = sql.find('FROM')
-        where_idx = sql.find('WHERE')
-        table_name = sql[from_idx + 4: where_idx].strip().replace('`', '')
-    elif sql.strip().upper().startswith('UPDATE'):
-        update_idx = sql.find('UPDATE')
-        set_idx = sql.find('SET')
-        table_name = sql[update_idx + 6: set_idx].strip().replace('`', '')
-    elif sql.strip().upper().startswith('INSERT'):
-        insert_idx = sql.find('INSERT INTO')
-        values_idx = sql.find('`(`')
-        table_name = sql[insert_idx + 11: values_idx].strip().replace('`', '')
+    # DELETE FROM `db`.`tb` / UPDATE `db`.`tb` / INSERT INTO `db`.`tb` / INSERT IGNORE INTO / REPLACE INTO
+    match = re.match(r'(?i)^\s*(?:DELETE\s+FROM|UPDATE|INSERT(?:\s+IGNORE)?\s+INTO|REPLACE\s+INTO)'
+                     r'\s+((?:`[^`]+`\.)?`[^`]+`)', sql)
+    if match:
+        table_name = match.group(1).replace('`', '')
     return table_name
 
 
