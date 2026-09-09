@@ -5,11 +5,12 @@ import sys
 import datetime
 import pymysql
 import os
+import random
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent, GtidEvent
 from utils.binlog2sql_util import command_line_args, concat_sql_from_binlog_event, is_dml_event, event_type, \
     get_gtid_set, is_want_gtid, save_result_sql, dt_now, handle_rollback_sql, get_max_gtid, \
-    remove_max_gtid, connect2sync_mysql
+    remove_max_gtid, connect2sync_mysql, match_event_schema
 from utils.other_utils import create_unique_file, temp_open, split_condition, merge_rename_args, logger
 
 
@@ -121,9 +122,16 @@ class Binlog2sql(object):
                     self.binlogList.append(binary)
 
             cursor.execute("SELECT @@server_id")
-            self.server_id = cursor.fetchone()[0]
-            if not self.server_id:
+            master_server_id = cursor.fetchone()[0]
+            if not master_server_id:
                 raise ValueError('missing server_id in %s:%s' % (self.conn_setting['host'], self.conn_setting['port']))
+            # 不能直接用主库自身的 server_id 作为伪从库的 server_id：多个 binlog2sql 进程
+            # （如 --stop-never 长驻进程 + 另一次解析）会同时占用同一个 server_id，
+            # MySQL 会拒绝后建立的连接并报 1236 错误。生成一个与主库不同的随机 server_id。
+            while True:
+                self.server_id = random.randint(1, 2147483647)
+                if self.server_id != master_server_id:
+                    break
 
     def process_binlog(self):
         stream = BinLogStreamReader(connection_settings=self.conn_setting, server_id=self.server_id,
@@ -206,6 +214,9 @@ class Binlog2sql(object):
 
                 if isinstance(binlog_event, QueryEvent) and not self.only_dml:
                     if binlog_gtid and gtid_set and not is_want_gtid(self.gtid_set, binlog_gtid):
+                        continue
+                    # -d/--databases 过滤对 DDL 同样生效，避免其它库的 DDL 混入结果
+                    if self.only_schemas and not match_event_schema(binlog_event.schema, self.only_schemas):
                         continue
 
                     sql, db, table = concat_sql_from_binlog_event(

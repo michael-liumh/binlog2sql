@@ -318,6 +318,13 @@ def is_dml_event(event):
         return False
 
 
+def match_event_schema(event_schema, only_schemas):
+    """判断 DDL 事件所属的库是否在 -d/--databases 过滤范围内"""
+    if isinstance(event_schema, bytes):
+        event_schema = event_schema.decode('utf8')
+    return event_schema in only_schemas
+
+
 def event_type(event):
     t = None
     if isinstance(event, WriteRowsEvent):

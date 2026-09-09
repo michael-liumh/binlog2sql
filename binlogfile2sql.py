@@ -10,7 +10,7 @@ import re
 from utils.binlogfile2sql_util import command_line_args, BinLogFileReader
 from utils.binlog2sql_util import concat_sql_from_binlog_event, is_dml_event, event_type, logger, \
     get_gtid_set, is_want_gtid, save_result_sql, dt_now, handle_rollback_sql, \
-    get_max_gtid, remove_max_gtid, connect2sync_mysql
+    get_max_gtid, remove_max_gtid, connect2sync_mysql, match_event_schema
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent, GtidEvent
 from utils.other_utils import create_unique_file, temp_open, get_binlog_file_list, timestamp_to_datetime, \
     save_executed_result, split_condition, merge_rename_args
@@ -165,6 +165,9 @@ class BinlogFile2sql(object):
 
                 if isinstance(binlog_event, QueryEvent) and not self.only_dml:
                     if binlog_gtid and gtid_set and not is_want_gtid(self.gtid_set, binlog_gtid):
+                        continue
+                    # -d/--databases 过滤对 DDL 同样生效，避免其它库的 DDL 混入结果
+                    if self.only_schemas and not match_event_schema(binlog_event.schema, self.only_schemas):
                         continue
 
                     sql, db, table = concat_sql_from_binlog_event(

@@ -95,3 +95,6 @@ ENV/
 *.sql
 /utils/filter_or_flashback_binlog2sql_result.py
 /utils/sql2csv.py
+
+# ignore temp file
+tmp/*
