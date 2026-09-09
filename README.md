@@ -10,7 +10,8 @@ cd binlog2sql && \
 pip3 install -r requirements.txt
 ```
 git与pip的安装问题请自行搜索解决。
-推荐使用 pypy3 运行，效率会比 python3 高
+推荐使用 pypy3 / cpython 运行，效率会比 python3 高
+多版本环境管理，推荐用 uv
 
 注意事项
 ==============
@@ -119,4 +120,3 @@ TODO
 - [x] 添加 GTID 支持
 - [x] 添加条件过滤功能，参数：--where
 - [x] 添加数据同步支持：参数：--sync（注意，最好只同步DML，因为 --rename-db 参数对 DDL 不生效）
-- [ ] 添加数据转换支持，将 SQL 转换成 CSV
